@@ -1,0 +1,190 @@
+heat_template_version: 2013-05-23
+
+description: Template to deploy Penatho BI server CE 5.1
+
+parameters:
+  key_name:
+    type: string
+    description: Name of a KeyPair 
+  vm_name:
+    type: string
+    label: VM name
+  image_id:
+    type: string
+    label: Image ID
+    description: ID of the image to be used for compute instance
+  instance_type:
+    type: string
+    label: Instance Type
+    description: Type of instance (flavor) to be used
+    default: m1.large
+  availability_zone:
+    type: string
+    description: The Availability Zone to launch the instance.
+    default: nova
+  scheduler_hints:
+    type: string
+    description: The Host Aggregate to launch the instance in form of '{host:myhost}'.
+    default: nova
+  net_id:
+    type: string
+    description: ID of public (or private) sub network into which servers get deployed
+  security_groups:
+    type: comma_delimited_list
+    description: List of security group names or IDs
+    default: [biaas]
+  username:
+    type: string
+    description: Name of the pentaho user
+  user_password:
+    type: string
+    description: Database admin account password
+    hidden: true
+  port:
+    type: string
+    description: port for Tomcat e Pentaho
+  ip_repo:
+    type: string
+    description: public IP for wget download files, .jpeg, ecc. for custom configuration
+  net_id:
+    type: string
+    description: ID of public (or private) sub network into which servers get deployed
+  admin_password:
+    type: string
+    description: Password for Administration
+    hidden: true
+
+resources:
+  user_data_instance:
+    type: OS::Nova::Server
+    properties:
+      name: { get_param: vm_name }
+      key_name: { get_param: key_name }
+      image: { get_param: image_id }
+      flavor: { get_param: instance_type }
+      availability_zone: { get_param: availability_zone }
+      networks:
+        - port: { get_resource: user_data_instance_port }
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+            sudo su -
+            # Create Linux User Account
+            useradd -s /bin/bash -m pentaho
+            echo "pentaho:admin_password" | chpasswd
+            mkdir -p /home/pentaho/server/biserver-ce
+            mkdir -p .pentaho
+            echo 'pentaho ALL=(ALL) ALL' | sudo tee -a /etc/sudoers
+            apt-get update 
+            sed -i "s:^127.0.0.1:127.0.0.1 $HOSTNAME:" /etc/hosts
+            apt-get install -y openssh-server openssl bash libssl1.0.0
+            #install jdk
+            apt-get install -y openjdk-7-jdk
+            su root -c "echo 'export JAVA_HOME=\"/usr/lib/jvm/java-1.7.0-openjdk-amd64\"' >> /etc/environment"
+            #dowload and unzip pentaho server
+            apt-get install -y zip unzip
+            wget http://sourceforge.net/projects/pentaho/files/Business%20Intelligence%20Server/5.1/biserver-ce-5.1.0.0-752.zip
+            unzip -n biserver-ce-5.1.0.0-752.zip -d /home/pentaho/server
+            sudo chmod 770 /home/pentaho/server/biserver-ce/*.sh
+            sudo chmod 770 /home/pentaho/server/biserver-ce/tomcat/lib/*
+            su root -c "echo 'export CATALINA_HOME=\"/home/pentaho/server/biserver-ce/tomcat\"' >> /etc/environment"
+            # Edit tomcat-users.xml configuration file adding pentaho users
+            sed -i "s|<tomcat-users>|<tomcat-users>\n<role rolename=\"manager-gui\"/>\n<role rolename=\"admin-gui\"/>\n<role rolename=\"PENTAHO_ADMIN\"/>\n<user username=\"admin\" password=\"admin_password\" roles=\"manager-gui,admin-gui\"/>|g" /home/pentaho/server/biserver-ce/tomcat/conf/tomcat-users.xml
+            #Configuring the context.xml with right path
+            sed -i "s|docbase=".*$"|docbase=\"/home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/\">|g" /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/META-INF/context.xml
+            # Disable quartz embedded listner
+            sed -i "s|<bean id=\"quartzSystemListener\" class=\"org.pentaho.platform.scheduler2.quartz.EmbeddedQuartzSystemListener\" \/>|<!-- \n <bean id=\"quartzSystemListener\" class=\"org.pentaho.platform.scheduler2.quartz.EmbeddedQuartzSystemListener\" \/> \n -->|g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/systemListeners.xml
+            # Disable suggestion of pentaho user
+            sed -i "s|<login-show-users-list>true</login-show-users-list>|<login-show-users-list>false</login-show-users-list>|g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/pentaho.xml
+            sed -i "s|<login-show-sample-users-hint>true</login-show-sample-users-hint>|<login-show-sample-users-hint>false</login-show-sample-users-hint>|g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/pentaho.xml
+            sed -i "s|<login-show-users-list>true</login-show-users-list>|<login-show-users-list>false</login-show-users-list>|g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/applicationContext-spring-security-memory.xml
+            # Increase the CSV File Upload Limit
+            sed -i "s/<max-file-limit>10000000/<max-file-limit>10000000000/g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/pentaho.xml
+            sed -i "s/<max-folder-limit>500000000/<max-folder-limit>500000000000/g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/pentaho.xml
+            # Enable JPivot in the User Console
+            sed -i "s|<show-deprecation-warning>.$*|<show-deprecation-warning>false</show-deprecation-warning>|g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/pentaho-jpivot-plugin/settings.xml
+            #Customise Login
+            cp /home/pentaho/server/biserver-ce/pentaho-solutions/system/common-ui/resources/themes/crystal/images/login-crystal-bg.jpeg /home/pentaho/server/biserver-ce/pentaho-solutions/system/common-ui/resources/themes/crystal/images/login-crystal-bgOLD.jpeg
+            wget http://ip_repo/login-crystal-bg.jpeg -O /home/pentaho/server/biserver-ce/pentaho-solutions/system/common-ui/resources/themes/crystal/images/login-crystal-bg.jpeg
+            #Script to start pentaho at VM restart time
+            cat << EOF > /etc/init.d/pentaho
+            #!/bin/sh
+            ### BEGIN INIT INFO
+            # Provides: start-pentaho stop-pentaho
+            # Required-Start: networking postgresql
+            # Required-Stop: postgresql
+            # Default-Start: 2 3 4 5
+            # Default-Stop: 0 1 6
+            # Description: Pentaho BA Server
+            ### END INIT INFO
+            case "$1" in
+            "start")
+            su - pentaho -c "/home/pentaho/server/biserver-ce/start-pentaho.sh"
+            ;;
+            "stop")
+            su - pentaho -c "/home/pentaho/server/biserver-ee/stop-pentaho.sh"
+            ;;
+            *)
+            echo "Usage: $0 { start | stop }"
+            ;;
+            esac
+            exit 0
+            EOF
+            inizio="if [ \"$errCode\"" 
+            fine="fi"
+            sed -i 's/inizio/,/fine/c\if [ \"$?\" = 0 ]; then\n cd \"$DIR\/tomcat\/bin\"\n export CATALINA_OPTS=\"-Xms4096m -Xmx6144m -XX:MaxPermSize=256m -Dsun.rmi.dgc.client.gcInterval=3600000 -Dsun.rmi.dgc.server.gcInterval=3600000\"\n env JAVA_HOME=$_PENTAHO_JAVA_HOME sh ./startup.sh\n fi' /etc/init.d/pentaho
+            chmod +x /etc/init.d/pentaho
+            update-rc.d pentaho defaults
+            # Driver JDBC (default postgresql 9.1, mysql 5.1, hsqldb e h2)
+            wget -O /usr/share/java/postgresql-9.2-1003.jdbc4.jar jdbc.postgresql.org/download/postgresql-9.2-1003.jdbc4.jar
+            ln -s /usr/share/java/postgresql-9.2-1003.jdbc4.jar /usr/share/java/postgresql-9.2-jdbc4.jar
+            ln -s /usr/share/java/postgresql-9.2-jdbc4.jar /home/pentaho/server/biserver-ce/tomcat/lib/postgresql-9.2-jdbc4.jar
+            sudo chmod 770 /home/pentaho/pentaho/server/biserver-ce/*.sh
+            sudo chmod 770 /home/pentaho/pentaho/server/biserver-ce/tomcat/lib/*
+            #Start Tomcat and Pentaho BA server
+            /home/pentaho/server/biserver-ce/start-pentaho.sh
+            # Delete default user put, suzy, tiffany
+            curl -u admin:password -X PUT -H"Content-Type: application/json" http://127.0.0.1:8080/pentaho/api/userroledao/deleteUsers??userNames=tiffany
+            curl -u admin:password -X PUT -H"Content-Type: application/json" http://127.0.0.1:8080/pentaho/api/userroledao/deleteUsers??userNames=pat
+            curl -u admin:password -X PUT -H"Content-Type: application/json" http://127.0.0.1:8080/pentaho/api/userroledao/deleteUsers??userNames=suzy
+            # change default admin password
+            curl -u admin:password -X PUT -H"Content-Type: application/json" -d '{"userName": "admin", "password" : "admin_password"}' http://127.0.0.1:8080/pentaho/api/userroledao/updatePassword
+          params:
+            admin_password: { get_param: admin_password }
+            user_password: { get_param: user_password }
+            username: { get_param: username }
+            port: { get_param: port }
+            ip_repo: { get_param: ip_repo }
+
+  user_data_instance_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_param: net_id }
+      security_groups: { get_param: security_groups }
+
+outputs:
+  vmIp:
+    description: The IP address of the deployed instance
+    value: { get_attr: [user_data_instance, first_address] }
+  vmUuid:
+    description: Resource ID assigned to the newly created instance
+    value: { get_resource: user_data_instance }
+  vmName:
+    description: vm name 
+    value: { get_param: vm_name }
+  serviceType: 
+    description: List of services and ports to be monitored 
+    value:
+      str_replace:
+        template: tomcat:port1, pentaho:port2
+        params:
+          port1: { get_param: port } 
+          port2: { get_param: port } 
+  URL: 
+    description: Pentaho BI Community Edition can be accessed at 
+    value:
+      str_replace:
+        template: http://host:8080/pentaho
+        params:
+          host: { get_attr: [user_data_instance, first_address] } 
