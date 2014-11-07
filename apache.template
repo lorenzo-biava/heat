@@ -1,0 +1,87 @@
+heat_template_version: 2013-05-23
+
+description: Template to deploy a single Apache instance 
+
+parameters:
+  key_name:
+    type: string
+    label: Key VM
+  vm_name:
+    type: string
+    label: VM name
+  image_id:
+    type: string
+    label: Image ID
+    description: Image to be used for compute instance
+  instance_type:
+    type: string
+    label: Instance Type
+    description: Type of instance (flavor) to be used
+    default: small.bronze
+  net_id:
+    type: string
+    description: ID of public (sub) network into which servers get deployed
+  availability_zone:
+    type: string
+    description: The Availability Zone to launch the instance.
+    default: nova
+  scheduler_hints:
+    type: string
+    description: The Host Aggregate to launch the instance in form of '{host:myhost}'.
+    default: nova
+  security_groups:
+    type: comma_delimited_list
+    description: List of security group names or IDs
+    default: [apache]
+  port:
+    type: string
+    description: port for Apache
+    default: 80
+
+resources:
+  my_instance:
+    type: OS::Nova::Server
+    properties:
+      name: { get_param: vm_name }
+      key_name: { get_param: key_name }
+      image: { get_param: image_id }
+      flavor: { get_param: instance_type }
+      availability_zone: { get_param: availability_zone }
+      networks:
+        - port: { get_resource: server1_port }
+      user_data: |
+            #!/bin/bash -v
+            sudo su -
+            apt-get update
+            apt-get install -y openssh-server openssl bash libssl1.0.0
+            apt-get install -y apache2
+            sed -i "s:^127.0.0.1:127.0.0.1 $HOSTNAME:" /etc/hosts
+            echo "ServerName localhost" | sudo tee /etc/apache2/conf-available/servername.conf
+            sudo a2enconf servername
+            service apache2 restart
+            chmod +x /etc/init.d/apache2
+            update-rc.d apache2 defaults
+
+  server1_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_param: net_id }
+      security_groups: { get_param: security_groups }
+
+outputs:
+  vmIp:
+    description: The IP address of the deployed instance
+    value: { get_attr: [my_instance, first_address] }
+  vmUuid:
+    description: Resource ID assigned to the newly created instance
+    value: { get_resource: my_instance }
+  vmName:
+    description: vm name 
+    value: { get_param: vm_name }
+  serviceType: 
+    description: List of services and ports to be monitored 
+    value:
+      str_replace:
+        template: apache:port
+        params:
+          port: { get_param: port } 
