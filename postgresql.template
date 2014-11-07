@@ -1,0 +1,162 @@
+heat_template_version: 2013-05-23
+
+description: Template to deploy a single user data instance (PostgreSQL 9.3 + change data directory)
+
+parameters:
+
+  key_name:
+    type: string
+    description: Name of a KeyPair 
+  vm_name:
+    type: string
+    label: VM name
+  image_id:
+    type: string
+    label: Image ID
+    description: ID of the image to be used for compute instance
+  instance_type:
+    type: string
+    label: Instance Type
+    description: Type of instance (flavor) to be used
+    default: small.bronze
+  availability_zone:
+    type: string
+    description: The Availability Zone to launch the instance.
+    default: nova
+  scheduler_hints:
+    type: string
+    description: The Host Aggregate to launch the instance in form of '{host:myhost}'.
+    default: nova
+  security_groups:
+    type: string
+    description: List of security group names or IDs
+    default: [dbaas]
+  net_id:
+    type: string
+    description: ID of public (or private) sub network into which servers get deployed
+  security_groups:
+    type: string
+    description: List of security group names or IDs
+    default: [dbaas]
+  db_name:
+    type: string
+    description: Database name
+  db_username:
+    type: string
+    description: Database admin account username
+  db_password:
+    type: string
+    description: Database admin account password
+    hidden: true
+  db_root_password:
+    type: string
+    description: Root password for PostgreSQL
+    hidden: true
+  volume_size:
+    type: number
+    description: Size of the volume to be created.
+    default: 1
+  device_name:
+    type: string
+    description: Device name used by Openstack, currently other name does not work
+    default: /dev/vdc
+  mountpoint:
+    type: string
+    description: The directory to provide to the user
+    default: /mnt/workingdir
+  volume_type:
+    type: string
+    description: Type of volume to be used (encrypted or not)
+    default: data
+
+resources:
+  user_data_instance:
+    type: OS::Nova::Server
+    properties:
+      name: { get_param: vm_name }
+      key_name: { get_param: key_name }
+      image: { get_param: image_id }
+      flavor: { get_param: instance_type }
+      availability_zone: { get_param: availability_zone }
+      networks:
+        - port: { get_resource: user_data_instance_port }
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+            sudo su -
+            #Install PostgreSQL  
+            echo "deb http://apt.postgresql.org/pub/repos/apt/ precise-pgdg main" >> /etc/apt/sources.list
+            wget --quiet -O - http://apt.postgresql.org/pub/repos/apt/ACCC4CF8.asc | sudo apt-key add -
+            apt-get update
+            apt-get install -y postgresql-9.3 postgresql-contrib
+            # Configure Postgres Remote Access
+            sed -i "s/#listen_addresses = 'localhost'/listen_addresses = '*'/g" /etc/postgresql/9.3/main/postgresql.conf
+            echo "host    all             all             0.0.0.0/0               md5" | tee -a /etc/postgresql/9.3/main/pg_hba.conf
+            sudo service postgresql restart
+            sudo service postgresql stop
+            #Allow user to use volume
+            mkdir -p mountpoint 
+            mkfs.ext4 device_name
+            mount device_name mountpoint
+            #Change PostgreSQL default data directory
+            sudo chown -R postgres:postgres mountpoint
+            sudo cp -R -p /etc/postgresql/9.3/main mountpoint
+            ln -s mountpoint /etc/postgresql/9.3/main
+            sed -i "s:^data_directory.*$:data_directory\t\t= 'mountpoint':" /etc/postgresql/9.3/main/postgresql.conf
+            sudo pg_dropcluster 9.3 main
+            sudo pg_createcluster -d mountpoint --start-conf auto 9.3 main
+            sudo service postgresql restart
+            # Setup postgres password, create a user and db
+            sudo -u postgres psql -c "alter role postgres password 'db_rootpassword';" 
+            sudo -u postgres psql -c "create role db_user password 'db_password' SUPERUSER CREATEDB CREATEROLE INHERIT;" 
+            sudo -u postgres createdb db_name -O db_user;
+            sudo -u postgres psql -c "alter role db_user LOGIN;" 
+            chmod +x /etc/init.d/postgresql
+            update-rc.d postgresql defaults
+            exit
+          params:
+            db_rootpassword: { get_param: db_root_password }
+            db_name: { get_param: db_name }
+            db_user: { get_param: db_username }
+            db_password: { get_param: db_password }
+            mountpoint: { get_param: mountpoint }
+            device_name: { get_param: device_name }
+  cinder_volume:
+    type: OS::Cinder::Volume
+    properties:
+      size: { get_param: volume_size }
+      availability_zone: { get_param: availability_zone }
+      volume_type: { get_param: volume_type }
+  volume_attachment:
+    type: OS::Cinder::VolumeAttachment
+    properties:
+      volume_id: { get_resource: cinder_volume }
+      instance_uuid: { get_resource: user_data_instance }
+      mountpoint: { get_param: device_name }
+  user_data_instance_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_param: net_id }
+      security_groups: { get_param: security_groups }
+
+outputs:
+  vmIp:
+    description: The IP address of the deployed instance
+    value: { get_attr: [user_data_instance, first_address] }
+  vmUuid:
+    description: Resource ID assigned to the newly created instance
+    value: { get_resource: user_data_instance }
+  vmName:
+    description: vm name 
+    value: { get_param: vm_name }
+  serviceType: 
+    description: List of services and ports to be monitored 
+    value:
+      str_replace:
+        template: postgresql:port
+        params:
+          port: { get_param: port } 
+  volume_id:
+    description: Resource ID assigned to the newly created volume attached to instance
+    value: { get_resource: cinder_volume } 
