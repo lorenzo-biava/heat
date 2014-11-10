@@ -1,6 +1,6 @@
 heat_template_version: 2013-05-23
 
-description: Template to deploy Penatho BI server CE 5.1
+description: Template to deploy a Pentaho BI - server instance (jdk7 + Pentaho 5.1)
 
 parameters:
   key_name:
@@ -17,7 +17,7 @@ parameters:
     type: string
     label: Instance Type
     description: Type of instance (flavor) to be used
-    default: m1.large
+    default: large.bronze
   availability_zone:
     type: string
     description: The Availability Zone to launch the instance.
@@ -86,8 +86,6 @@ resources:
             apt-get install -y zip unzip
             wget http://sourceforge.net/projects/pentaho/files/Business%20Intelligence%20Server/5.1/biserver-ce-5.1.0.0-752.zip
             unzip -n biserver-ce-5.1.0.0-752.zip -d /home/pentaho/server
-            sudo chmod 770 /home/pentaho/server/biserver-ce/*.sh
-            sudo chmod 770 /home/pentaho/server/biserver-ce/tomcat/lib/*
             su root -c "echo 'export CATALINA_HOME=\"/home/pentaho/server/biserver-ce/tomcat\"' >> /etc/environment"
             # Edit tomcat-users.xml configuration file adding pentaho users
             sed -i "s|<tomcat-users>|<tomcat-users>\n<role rolename=\"manager-gui\"/>\n<role rolename=\"admin-gui\"/>\n<role rolename=\"PENTAHO_ADMIN\"/>\n<user username=\"admin\" password=\"admin_password\" roles=\"manager-gui,admin-gui\"/>|g" /home/pentaho/server/biserver-ce/tomcat/conf/tomcat-users.xml
@@ -140,14 +138,14 @@ resources:
             wget -O /usr/share/java/postgresql-9.2-1003.jdbc4.jar jdbc.postgresql.org/download/postgresql-9.2-1003.jdbc4.jar
             ln -s /usr/share/java/postgresql-9.2-1003.jdbc4.jar /usr/share/java/postgresql-9.2-jdbc4.jar
             ln -s /usr/share/java/postgresql-9.2-jdbc4.jar /home/pentaho/server/biserver-ce/tomcat/lib/postgresql-9.2-jdbc4.jar
-            sudo chmod 770 /home/pentaho/pentaho/server/biserver-ce/*.sh
-            sudo chmod 770 /home/pentaho/pentaho/server/biserver-ce/tomcat/lib/*
+            sudo chmod 770 /home/pentaho/server/biserver-ce/*.sh
+            sudo chmod 770 /home/pentaho/server/biserver-ce/tomcat/lib/*
             #Start Tomcat and Pentaho BA server
             /home/pentaho/server/biserver-ce/start-pentaho.sh
             # Delete default user put, suzy, tiffany
-            curl -u admin:password -X PUT -H"Content-Type: application/json" http://127.0.0.1:8080/pentaho/api/userroledao/deleteUsers??userNames=tiffany
-            curl -u admin:password -X PUT -H"Content-Type: application/json" http://127.0.0.1:8080/pentaho/api/userroledao/deleteUsers??userNames=pat
-            curl -u admin:password -X PUT -H"Content-Type: application/json" http://127.0.0.1:8080/pentaho/api/userroledao/deleteUsers??userNames=suzy
+            curl -u admin:password -X PUT -H"Content-Type: application/json" http://127.0.0.1:8080/pentaho/api/userroledao/deleteUsers?userNames=tiffany
+            curl -u admin:password -X PUT -H"Content-Type: application/json" http://127.0.0.1:8080/pentaho/api/userroledao/deleteUsers?userNames=pat
+            curl -u admin:password -X PUT -H"Content-Type: application/json" http://127.0.0.1:8080/pentaho/api/userroledao/deleteUsers?userNames=suzy
             # change default admin password
             curl -u admin:password -X PUT -H"Content-Type: application/json" -d '{"userName": "admin", "password" : "admin_password"}' http://127.0.0.1:8080/pentaho/api/userroledao/updatePassword
           params:
@@ -188,3 +186,4 @@ outputs:
         template: http://host:8080/pentaho
         params:
           host: { get_attr: [user_data_instance, first_address] } 
+
