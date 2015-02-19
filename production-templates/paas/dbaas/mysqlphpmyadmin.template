@@ -1,0 +1,259 @@
+--- 
+description: "Deploy a single compute instance with MySQL + PHPMyAdmin + Volume (symbolic link)"
+heat_template_version: 2013-05-23
+outputs: 
+  instance_id: 
+    description: "Resource ID assigned to the newly created instance"
+    value: 
+      get_resource: my_instance
+  instance_ip: 
+    description: "Public IP address of the newly created Nova instance."
+    value: 
+      get_attr: 
+        - my_instance
+        - first_address
+  manageURL: 
+    description: "phpMyAdmin can be accessed at"
+    value: 
+      str_replace: 
+        params: 
+          host: 
+            get_attr: 
+              - my_instance
+              - first_address
+        template: "http://host/phpmyadmin"
+  volume_id: 
+    description: "Resource ID assigned to the newly created volume attached to instance"
+    value: 
+      get_resource: cinder_volume
+parameters: 
+  availability_zone: 
+    default: nova
+    description: "The Availability Zone to launch the instance."
+    type: string
+  db_name: 
+    constraints: 
+      - 
+        length: 
+          max: 64
+          min: 4
+      - 
+        allowed_pattern: "[a-zA-Z0-9-_]*"
+        description: "db_name must contain only alphanumeric characters or _ or -"
+    default: tempdatabase
+    description: "Database name"
+    type: string
+  db_password: 
+    constraints: 
+      - 
+        description: "admin account password  must be between 5 and 41 characters"
+        length: 
+          max: 41
+          min: 5
+      - 
+        allowed_pattern: "[a-zA-Z0-9]*"
+        description: "db_password must contain only alphanumeric characters"
+    default: admin
+    description: "Database admin account password"
+    hidden: true
+    type: string
+  db_root_password: 
+    constraints: 
+      - 
+        description: "root password must be between 4 and 41 characters"
+        length: 
+          max: 41
+          min: 4
+      - 
+        allowed_pattern: "[a-zA-Z0-9]*"
+        description: "db_password must contain only alphanumeric characters"
+    default: admin
+    description: "Root password for MySQL"
+    hidden: true
+    type: string
+  db_username: 
+    constraints: 
+      - 
+        length: 
+          max: 16
+          min: 3
+      - 
+        allowed_pattern: "[a-zA-Z][a-zA-Z0-9]*"
+        description: "db_username must begin with a letter and contain only alphanumeric characters"
+    default: admin
+    description: "Database admin account username"
+    hidden: true
+    type: string
+  device_name: 
+    default: /dev/vdc
+    description: "Device name used by Openstack, currently other name does not work"
+    type: string
+  image_id: 
+    description: "Image to be used for compute instance"
+    label: "Image ID"
+    type: string
+  instance_type: 
+    default: m1.small
+    description: "Type of instance (flavor) to be used"
+    label: "Instance Type"
+    type: string
+  key_name: 
+    description: "Name of a KeyPair"
+    type: string
+  mountpoint: 
+    default: /mnt/workingdir
+    description: "The directory to provide to the user"
+    type: string
+  net_id: 
+    description: "ID of public (or private) sub network into which servers get deployed"
+    type: string
+  scheduler_hints: 
+    default: nova
+    description: "The Host Aggregate to launch the instance in form of '{host:myhost}'."
+    type: string
+  security_groups: 
+    default: 
+      - allow_all
+    description: "List of security group names or IDs"
+    type: string
+  shared_net_id: 
+    description: "ID of private sub network into which servers get deployed"
+    type: string
+  vm_name: 
+    label: "VM name"
+    type: string
+  volume_size: 
+    constraints: 
+      - 
+        description: "must be between 1 and 1024 Gb."
+        range: 
+          max: 1024
+          min: 1
+    default: 1
+    description: "Size of the volume to be created."
+    type: number
+  volume_type: 
+    default: data
+    description: "Type of volume to be used (encrypted or not)"
+    type: string
+resources: 
+  cinder_volume: 
+    properties: 
+      availability_zone: 
+        get_param: availability_zone
+      size: 
+        get_param: volume_size
+      volume_type: 
+        get_param: volume_type
+    type: "OS::Cinder::Volume"
+  my_instance: 
+    properties: 
+      availability_zone: 
+        get_param: availability_zone
+      flavor: 
+        get_param: instance_type
+      image: 
+        get_param: image_id
+      key_name: 
+        get_param: key_name
+      name: 
+        get_param: vm_name
+      networks: 
+        - 
+          port: 
+            get_resource: server1_port
+      user_data: 
+        str_replace: 
+          params: 
+            db_name: 
+              get_param: db_name
+            db_password: 
+              get_param: db_password
+            db_rootpassword: 
+              get_param: db_root_password
+            db_user: 
+              get_param: db_username
+            device_name: 
+              get_param: device_name
+            mountpoint: 
+              get_param: mountpoint
+          template: |
+              #!/bin/bash -v
+              sudo su -
+              apt-get update
+              debconf-set-selections <<< 'mysql-server mysql-server/root_password password root'
+              debconf-set-selections <<< 'mysql-server mysql-server/root_password_again password root'
+              apt-get -y install mysql-server
+              # Setting bind address to mysql remote access
+              sed -i "s/127.0.0.1/0.0.0.0/g" /etc/mysql/my.cnf
+              sudo service mysql restart
+              sudo service mysql stop
+              #Allow user to use volume
+              mkdir -p mountpoint 
+              mkfs.ext4 device_name
+              mount device_name mountpoint
+              #Change MySQL datadir
+              sudo chown -R mysql:mysql mountpoint
+              sudo cp -R -p /var/lib/mysql mountpoint
+              sed -i "s:^datadir.*$:datadir\t\t= mountpoint:" /etc/mysql/my.cnf
+              sed -i "s:/var/lib/mysql:mountpoint:g" /etc/apparmor.d/usr.sbin.mysqld
+              /etc/init.d/apparmor reload
+              /etc/init.d/apparmor restart
+              mysql_install_db --datadir=mountpoint
+              sudo service mysql restart
+              # Setup MySQL root password 
+              mysqladmin -u root password db_rootpassword
+              # Create a user and the DB
+              cat << EOF | mysql -u root --password=db_rootpassword
+              CREATE DATABASE db_name;
+              GRANT ALL PRIVILEGES ON db_name.* TO "db_user"@"localhost" IDENTIFIED BY "db_password";
+              GRANT ALL PRIVILEGES ON db_name.* TO "db_user"@"%" IDENTIFIED BY "db_password";
+              FLUSH PRIVILEGES;
+              EXIT
+              EOF
+              # Apache2 installation
+              apt-get install -y apache2
+              # PHP installation
+              apt-get install -q -y php5 libapache2-mod-php5 php5-mcrypt
+              # PHPMyAdmin installation
+              echo 'phpmyadmin phpmyadmin/dbconfig-install boolean true' | debconf-set-selections
+              echo "phpmyadmin phpmyadmin/app-password-confirm password db_rootpassword" | debconf-set-selections
+              echo "phpmyadmin phpmyadmin/mysql/admin-pass password db_rootpassword" | debconf-set-selections
+              echo "phpmyadmin phpmyadmin/mysql/app-pass password db_rootpassword" | debconf-set-selections
+              echo 'phpmyadmin phpmyadmin/reconfigure-webserver multiselect apache2' | debconf-set-selections
+              apt-get install -q -y phpmyadmin php5-mysql
+              echo "Include /etc/phpmyadmin/apache.conf" >> /etc/apache2/apache2.conf
+              service apache2 restart
+              echo "---Personalizzo il file di configurazione di Zabbix Agent"
+              wget "http://repo.zabbix.com/zabbix/2.2/ubuntu/pool/main/z/zabbix-release/zabbix-release_2.2-1+precise_all.deb"
+              dpkg -i zabbix-release_2.2-1+precise_all.deb
+              apt-get update
+              apt-get install zabbix-agent
+              zabbix_metrics="zabbix-metrics.infn.ponsmartcities-prisma.it"
+              zabbix_watcher="zabbix-watcher.infn.ponsmartcities-prisma.it"
+              sed -i -e "s/^Server=.*/Server=${zabbix_metrics},${zabbix_watcher}/" /etc/zabbix/zabbix_agentd.conf
+              sed -i -e "s/^ServerActive=.*/ServerActive=${zabbix_metrics},${zabbix_watcher}/" /etc/zabbix/zabbix_agentd.conf
+              sed -i -e "s/^Hostname=.*/Hostname=${HOSTNAME//./_}/" /etc/zabbix/zabbix_agentd.conf
+              service zabbix-agent restart
+              echo "---Personalizzo il file di configurazione di Puppet Agent"
+              puppetMaster="puppet-master.infn.ponsmartcities-prisma.it"
+              puppet agent --server $puppetMaster --onetime --no-daemonize --verbose
+              exit
+    type: "OS::Nova::Server"
+  server1_port: 
+    properties: 
+      network_id: 
+        get_param: net_id
+      security_groups: 
+        get_param: security_groups
+    type: "OS::Neutron::Port"
+  volume_attachment: 
+    properties: 
+      instance_uuid: 
+        get_resource: my_instance
+      mountpoint: 
+        get_param: device_name
+      volume_id: 
+        get_resource: cinder_volume
+    type: "OS::Cinder::VolumeAttachment"
+
