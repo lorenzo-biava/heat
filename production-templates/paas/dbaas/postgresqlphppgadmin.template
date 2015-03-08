@@ -20,7 +20,7 @@ parameters:
     type: string
     label: Instance Type
     description: Type of instance (flavor) to be used
-    default: m1.small
+    default: small.bronze
   availability_zone:
     type: string
     description: The Availability Zone to launch the instance.
