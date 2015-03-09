@@ -9,6 +9,13 @@ parameters:
   vm_name:
     type: string
     label: VM name
+  image_id:
+    type: string
+    label: Image ID
+    description: ID of the image to be used for compute instance
+    constraints:
+       - allowed_values: [PRISMA-Ubuntu-14.04-x86_64]
+    default: PRISMA-Ubuntu-14.04-x86_64
   instance_type:
     type: string
     label: Instance Type
@@ -92,6 +99,12 @@ parameters:
     default: 1
     description: "Size of the volume to be created."
     type: number
+  device_name:
+    type: string
+    description: Device name used by Openstack,not vda or vda1
+    constraints:
+     - allowed_values: [ /dev/vdb ]
+    default: /dev/vdb
   mountpoint:
     type: string
     description: The directory to provide to the user
@@ -100,18 +113,26 @@ parameters:
     type: string
     description: Type of volume to be used (encrypted or not)
     default: data
+  port1:
+    type: string
+    description: port for Apache
+    default: 80
+  port2:
+    type: string
+    description: port for PostgreSQL
+    default: 5432
 
 resources:
-  my_instance:
+  user_data_instance:
     type: OS::Nova::Server
     properties:
       name: { get_param: vm_name }
       key_name: { get_param: key_name }
-      image: PRISMA-Ubuntu-14.04-x86_64
+      image: { get_param: image_id }
       availability_zone: { get_param: availability_zone }
       flavor: { get_param: instance_type }
       networks:
-        - port: { get_resource: my_instance_port }
+        - port: { get_resource: user_data_instance_port }
       user_data_format: RAW
       user_data:
         str_replace:
@@ -222,12 +243,12 @@ resources:
             db_user: { get_param: db_username }
             db_password: { get_param: db_password }
             mountpoint: { get_param: mountpoint }
-            device_name: /dev/vdb
+            device_name: { get_param: device_name }
             $wait_handle$: { get_resource: wait_condition_handle}
     
   wait_condition:
            type: AWS::CloudFormation::WaitCondition
-           depends_on: my_instance
+           depends_on: user_data_instance
            properties:
             Count: 1
             Handle: { get_resource: wait_condition_handle }
@@ -246,9 +267,9 @@ resources:
     type: OS::Cinder::VolumeAttachment
     properties:
       volume_id: { get_resource: cinder_volume }
-      instance_uuid: { get_resource: my_instance }
-      mountpoint: /dev/vdb
-  my_instance_port:
+      instance_uuid: { get_resource: user_data_instance }
+      mountpoint: { get_param: device_name }
+  user_data_instance_port:
     type: OS::Neutron::Port
     properties:
       network_id: { get_param: net_id }
@@ -266,7 +287,7 @@ outputs:
         - my_instance
         - first_address
   manageURL: 
-    description: "phpPgAdmin can be accessed at"
+    description: "phpMyAdmin can be accessed at"
     value: 
       str_replace: 
         params: 
@@ -274,9 +295,43 @@ outputs:
             get_attr: 
               - my_instance
               - first_address
-        template: "http://host/phppgadmin"
+        template: "http://host/phpmyadmin"
   volume_id: 
     description: "Resource ID assigned to the newly created volume attached to instance"
     value: 
       get_resource: cinder_volume
+
+
+  vmIp:
+    description: The IP address of the deployed instance
+    value: { get_attr: [user_data_instance, first_address] }
+  vmUuid:
+    description: Resource ID assigned to the newly created instance
+    value: { get_resource: user_data_instance }
+  vmName:
+    description: vm name 
+    value: { get_param: vm_name }
+  serviceType: 
+    description: List of services and ports to be monitored 
+    value:
+      str_replace:
+        template: apache:port1, postgresql:port2
+        params:
+          port1: { get_param: port1 } 
+          port2: { get_param: port2 } 
+  manageURL: 
+    description: phpMyAdmin can be accessed at 
+    value:
+      str_replace:
+        template: http://host/phppgadmin
+        params:
+          host: { get_attr: [user_data_instance, first_address] } 
+  volumeUuid:
+    description: Resource ID assigned to the newly created volume attached to instance
+    value: { get_resource: cinder_volume }
+
+  data_wait:
+         description: The data passed back in the WaitCondition
+         value: { get_attr : [ wait_condition, Data ]}
+    
 
