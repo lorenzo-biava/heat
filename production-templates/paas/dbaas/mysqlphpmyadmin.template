@@ -1,4 +1,3 @@
---- 
 description: "Deploy a single compute instance with MySQL + PHPMyAdmin + Volume (symbolic link)"
 heat_template_version: 2013-05-23
 outputs: 
@@ -84,14 +83,6 @@ parameters:
     description: "Database admin account username"
     hidden: true
     type: string
-  device_name: 
-    default: /dev/vdc
-    description: "Device name used by Openstack, currently other name does not work"
-    type: string
-  image_id: 
-    description: "Image to be used for compute instance"
-    label: "Image ID"
-    type: string
   instance_type: 
     default: m1.small
     description: "Type of instance (flavor) to be used"
@@ -111,14 +102,11 @@ parameters:
     default: nova
     description: "The Host Aggregate to launch the instance in form of '{host:myhost}'."
     type: string
-  security_groups: 
-    default: 
-      - allow_all
-    description: "List of security group names or IDs"
-    type: string
-  shared_net_id: 
-    description: "ID of private sub network into which servers get deployed"
-    type: string
+  security_groups:
+    type: comma_delimited_list
+    description: List of security group names or IDs
+    default:
+       - allow_all
   vm_name: 
     label: "VM name"
     type: string
@@ -146,14 +134,14 @@ resources:
       volume_type: 
         get_param: volume_type
     type: "OS::Cinder::Volume"
+
   my_instance: 
     properties: 
       availability_zone: 
         get_param: availability_zone
       flavor: 
         get_param: instance_type
-      image: 
-        get_param: image_id
+      image: PRISMA-Ubuntu-14.04-x86_64
       key_name: 
         get_param: key_name
       name: 
@@ -162,6 +150,7 @@ resources:
         - 
           port: 
             get_resource: server1_port
+      user_data_format: RAW
       user_data: 
         str_replace: 
           params: 
@@ -173,36 +162,48 @@ resources:
               get_param: db_root_password
             db_user: 
               get_param: db_username
-            device_name: 
-              get_param: device_name
+            device_name: /dev/vdb
             mountpoint: 
               get_param: mountpoint
+            $wait_handle$: { get_resource: wait_condition_handle}
           template: |
               #!/bin/bash -v
+              # Helper function to signal error condition
+              function notify_err
+               {
+                message=$1
+                curl -X PUT -H 'Content-Type:application/json' -d "{\"Status\" : \"FAILURE\",\"Reason\" : \"$message\",\"UniqueId\" : \"ID1\",\"Data\" : \"Server Configuration NOT OK\"}" \
+                       "$wait_handle$"
+                exit 1
+               }
+
               sudo su -
               apt-get update
-              debconf-set-selections <<< 'mysql-server mysql-server/root_password password root'
-              debconf-set-selections <<< 'mysql-server mysql-server/root_password_again password root'
-              apt-get -y install mysql-server
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get -q -y install mysql-server
               # Setting bind address to mysql remote access
               sed -i "s/127.0.0.1/0.0.0.0/g" /etc/mysql/my.cnf
-              sudo service mysql restart
-              sudo service mysql stop
+              service mysql restart
+              service mysql stop
               #Allow user to use volume
-              mkdir -p mountpoint 
-              mkfs.ext4 device_name
-              mount device_name mountpoint
+              mkdir -p mountpoint/data
+              chmod 0700 mountpoint/data
+              mkfs.ext4 device_name && mount device_name mountpoint/data || notify_err "Some problems occurred with block device"
+              echo "Successfully device mounted"
+              
+              #For reboot instance
+              echo 'device_name mountpoint/data ext4 defaults 0 0' >> /etc/fstab
               #Change MySQL datadir
-              sudo chown -R mysql:mysql mountpoint
-              sudo cp -R -p /var/lib/mysql mountpoint
-              sed -i "s:^datadir.*$:datadir\t\t= mountpoint:" /etc/mysql/my.cnf
-              sed -i "s:/var/lib/mysql:mountpoint:g" /etc/apparmor.d/usr.sbin.mysqld
+              chown -R mysql:mysql mountpoint/data
+              cp -R -p /var/lib/mysql mountpoint/data
+              sed -i "s:^datadir.*$:datadir\t\t= mountpoint/data:" /etc/mysql/my.cnf
+              sed -i "s:/var/lib/mysql:mountpoint/data:g" /etc/apparmor.d/usr.sbin.mysqld
               /etc/init.d/apparmor reload
               /etc/init.d/apparmor restart
-              mysql_install_db --datadir=mountpoint
-              sudo service mysql restart
+              mysql_install_db --datadir=mountpoint/data
+              service mysql restart || notify_err "Some problems occurred with mysql installation/configuration"
               # Setup MySQL root password 
-              mysqladmin -u root password db_rootpassword
+              mysqladmin -u root password db_rootpassword 
               # Create a user and the DB
               cat << EOF | mysql -u root --password=db_rootpassword
               CREATE DATABASE db_name;
@@ -211,6 +212,7 @@ resources:
               FLUSH PRIVILEGES;
               EXIT
               EOF
+              
               # Apache2 installation
               apt-get install -y apache2
               # PHP installation
@@ -223,37 +225,57 @@ resources:
               echo 'phpmyadmin phpmyadmin/reconfigure-webserver multiselect apache2' | debconf-set-selections
               apt-get install -q -y phpmyadmin php5-mysql
               echo "Include /etc/phpmyadmin/apache.conf" >> /etc/apache2/apache2.conf
-              service apache2 restart
-              echo "---Personalizzo il file di configurazione di Zabbix Agent"
-              wget "http://repo.zabbix.com/zabbix/2.2/ubuntu/pool/main/z/zabbix-release/zabbix-release_2.2-1+precise_all.deb"
-              dpkg -i zabbix-release_2.2-1+precise_all.deb
-              apt-get update
-              apt-get install zabbix-agent
+              service apache2 restart || notify_err "Some problems occurred with phpmyadmin installation/configuration"
+              
+              # Zabbix agent installation
+              echo "Zabbix Agent installation and configuration"
+              wget http://repo.zabbix.com/zabbix/2.2/ubuntu/pool/main/z/zabbix-release/zabbix-release_2.2-1+trusty_all.deb
+              dpkg -i zabbix-release_2.2-1+trusty_all.deb
+              apt-get update              
+              apt-get install -y zabbix-agent 
               zabbix_metrics="zabbix-metrics.infn.ponsmartcities-prisma.it"
               zabbix_watcher="zabbix-watcher.infn.ponsmartcities-prisma.it"
               sed -i -e "s/^Server=.*/Server=${zabbix_metrics},${zabbix_watcher}/" /etc/zabbix/zabbix_agentd.conf
               sed -i -e "s/^ServerActive=.*/ServerActive=${zabbix_metrics},${zabbix_watcher}/" /etc/zabbix/zabbix_agentd.conf
               sed -i -e "s/^Hostname=.*/Hostname=${HOSTNAME//./_}/" /etc/zabbix/zabbix_agentd.conf
-              service zabbix-agent restart
-              echo "---Personalizzo il file di configurazione di Puppet Agent"
+              service zabbix-agent restart || notify_err "Some problems occurred with Zabbix Agent installation/configuration"
+              
+              # Puppet agent installation
+              echo "Puppet agent installation and configuration"
+              wget https://apt.puppetlabs.com/puppetlabs-release-trusty.deb
+              dpkg -i puppetlabs-release-trusty.deb
+              apt-get update
+              apt-get install -y puppet-agent
               puppetMaster="puppet-master.infn.ponsmartcities-prisma.it"
               puppet agent --server $puppetMaster --onetime --no-daemonize --verbose
-              exit
+              [[ ! $? -eq 0 ]] || notify_err "Puppet agent failed. See logs for details"
+              
+              curl -X PUT -H 'Content-Type:application/json' -d '{"Status" : "SUCCESS","Reason" : "mysql and phpmyadmin installed OK","UniqueId" : "ID1","Data" : "Server Configuration OK"}' \
+                       "$wait_handle$"     
+              exit                
     type: "OS::Nova::Server"
+  wait_condition:
+           properties:
+            Count: 1
+            Handle: { get_resource: wait_condition_handle }
+            Timeout: 600
+           depends_on: my_instance
+           type: "AWS::CloudFormation::WaitCondition"
+  wait_condition_handle:
+           type: "AWS::CloudFormation::WaitConditionHandle"
   server1_port: 
     properties: 
       network_id: 
         get_param: net_id
-      security_groups: 
-        get_param: security_groups
+      security_groups: { get_param: security_groups }
     type: "OS::Neutron::Port"
   volume_attachment: 
     properties: 
       instance_uuid: 
         get_resource: my_instance
-      mountpoint: 
-        get_param: device_name
+      mountpoint: /dev/vdb
       volume_id: 
         get_resource: cinder_volume
     type: "OS::Cinder::VolumeAttachment"
+
 
