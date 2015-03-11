@@ -1,36 +1,36 @@
-description: "Deploy a single compute instance with MySQL + PHPMyAdmin + Volume (symbolic link)"
 heat_template_version: 2013-05-23
-outputs: 
-  instance_id: 
-    description: "Resource ID assigned to the newly created instance"
-    value: 
-      get_resource: my_instance
-  instance_ip: 
-    description: "Public IP address of the newly created Nova instance."
-    value: 
-      get_attr: 
-        - my_instance
-        - first_address
-  manageURL: 
-    description: "phpMyAdmin can be accessed at"
-    value: 
-      str_replace: 
-        params: 
-          host: 
-            get_attr: 
-              - my_instance
-              - first_address
-        template: "http://host/phpmyadmin"
-  volume_id: 
-    description: "Resource ID assigned to the newly created volume attached to instance"
-    value: 
-      get_resource: cinder_volume
+
+description: "Deploy a single compute instance with MySQL + PHPMyAdmin + Volume (symbolic link)"
+
 parameters: 
-  availability_zone: 
-    default: nova
-    description: "The Availability Zone to launch the instance."
+  key_name:
     type: string
+    description: Name of a KeyPair
+  vm_name:
+    type: string
+    label: VM name
+  instance_type:
+    type: string
+    label: Instance Type
+    description: Type of instance (flavor) to be used
+    default: small.bronze
+  availability_zone:
+    type: string
+    description: The Availability Zone to launch the instance.
+    default: nova
+  scheduler_hints:
+    type: string
+    description: The Host Aggregate to launch the instance in form of '{host:myhost}'.
+    default: nova
+  security_groups:
+    type: comma_delimited_list
+    description: List of security group names or IDs
+    default: [ dbaas ]
+  net_id:
+    type: string
+    description: ID of public (or private) sub network into which servers get deployed
   db_name: 
+    type: string
     constraints: 
       - 
         length: 
@@ -41,6 +41,18 @@ parameters:
         description: "db_name must contain only alphanumeric characters or _ or -"
     default: tempdatabase
     description: "Database name"
+  db_username:
+    constraints:
+      -
+        length:
+          max: 16
+          min: 3
+      -
+        allowed_pattern: "[a-zA-Z][a-zA-Z0-9]*"
+        description: "db_username must begin with a letter and contain only alphanumeric characters"
+    default: admin
+    description: "Database admin account username"
+    hidden: true
     type: string
   db_password: 
     constraints: 
@@ -70,46 +82,6 @@ parameters:
     description: "Root password for MySQL"
     hidden: true
     type: string
-  db_username: 
-    constraints: 
-      - 
-        length: 
-          max: 16
-          min: 3
-      - 
-        allowed_pattern: "[a-zA-Z][a-zA-Z0-9]*"
-        description: "db_username must begin with a letter and contain only alphanumeric characters"
-    default: admin
-    description: "Database admin account username"
-    hidden: true
-    type: string
-  instance_type: 
-    default: m1.small
-    description: "Type of instance (flavor) to be used"
-    label: "Instance Type"
-    type: string
-  key_name: 
-    description: "Name of a KeyPair"
-    type: string
-  mountpoint: 
-    default: /mnt/workingdir
-    description: "The directory to provide to the user"
-    type: string
-  net_id: 
-    description: "ID of public (or private) sub network into which servers get deployed"
-    type: string
-  scheduler_hints: 
-    default: nova
-    description: "The Host Aggregate to launch the instance in form of '{host:myhost}'."
-    type: string
-  security_groups:
-    type: comma_delimited_list
-    description: List of security group names or IDs
-    default:
-       - allow_all
-  vm_name: 
-    label: "VM name"
-    type: string
   volume_size: 
     constraints: 
       - 
@@ -124,18 +96,14 @@ parameters:
     default: data
     description: "Type of volume to be used (encrypted or not)"
     type: string
-resources: 
-  cinder_volume: 
-    properties: 
-      availability_zone: 
-        get_param: availability_zone
-      size: 
-        get_param: volume_size
-      volume_type: 
-        get_param: volume_type
-    type: "OS::Cinder::Volume"
+  mountpoint: 
+    default: /mnt/workingdir
+    description: "The directory to provide to the user"
+    type: string
 
+resources: 
   my_instance: 
+    type: OS::Nova::Server
     properties: 
       availability_zone: 
         get_param: availability_zone
@@ -149,7 +117,7 @@ resources:
       networks: 
         - 
           port: 
-            get_resource: server1_port
+            get_resource: my_instance_port
       user_data_format: RAW
       user_data: 
         str_replace: 
@@ -166,6 +134,7 @@ resources:
             mountpoint: 
               get_param: mountpoint
             $wait_handle$: { get_resource: wait_condition_handle}
+
           template: |
               #!/bin/bash -v
               # Helper function to signal error condition
@@ -186,16 +155,16 @@ resources:
               service mysql restart
               service mysql stop
               #Allow user to use volume
-              mkdir -p mountpoint/data
-              chmod 0700 mountpoint/data
-              mkfs.ext4 device_name && mount device_name mountpoint/data || notify_err "Some problems occurred with block device"
+              mkdir -p mountpoint
+              mkfs.ext4 device_name && mount device_name mountpoint || notify_err "Some problems occurred with block device"
               echo "Successfully device mounted"
               
               #For reboot instance
-              echo 'device_name mountpoint/data ext4 defaults 0 0' >> /etc/fstab
+              echo 'device_name mountpoint ext4 defaults 0 0' >> /etc/fstab
+              chmod -R 0755 mountpoint
               #Change MySQL datadir
-              chown -R mysql:mysql mountpoint/data
               cp -R -p /var/lib/mysql mountpoint/data
+              chown -R mysql:mysql mountpoint/data
               sed -i "s:^datadir.*$:datadir\t\t= mountpoint/data:" /etc/mysql/my.cnf
               sed -i "s:/var/lib/mysql:mountpoint/data:g" /etc/apparmor.d/usr.sbin.mysqld
               /etc/init.d/apparmor reload
@@ -225,8 +194,14 @@ resources:
               echo 'phpmyadmin phpmyadmin/reconfigure-webserver multiselect apache2' | debconf-set-selections
               apt-get install -q -y phpmyadmin php5-mysql
               echo "Include /etc/phpmyadmin/apache.conf" >> /etc/apache2/apache2.conf
+              php5enmod mcrypt 
               service apache2 restart || notify_err "Some problems occurred with phpmyadmin installation/configuration"
               
+              # install init script links to configure service autostart at reboot 
+              update-rc.d apache2 defaults
+              update-rc.d mysql defaults
+
+ 
               # Zabbix agent installation
               echo "Zabbix Agent installation and configuration"
               wget http://repo.zabbix.com/zabbix/2.2/ubuntu/pool/main/z/zabbix-release/zabbix-release_2.2-1+trusty_all.deb
@@ -245,37 +220,77 @@ resources:
               wget https://apt.puppetlabs.com/puppetlabs-release-trusty.deb
               dpkg -i puppetlabs-release-trusty.deb
               apt-get update
-              apt-get install -y puppet-agent
+              apt-get install -y puppet
               puppetMaster="puppet-master.infn.ponsmartcities-prisma.it"
               puppet agent --server $puppetMaster --onetime --no-daemonize --verbose
-              [[ ! $? -eq 0 ]] || notify_err "Puppet agent failed. See logs for details"
+              [[ $? -eq 0 ]] || notify_err "Puppet agent failed. See logs for details"
               
               curl -X PUT -H 'Content-Type:application/json' -d '{"Status" : "SUCCESS","Reason" : "mysql and phpmyadmin installed OK","UniqueId" : "ID1","Data" : "Server Configuration OK"}' \
                        "$wait_handle$"     
               exit                
-    type: "OS::Nova::Server"
+
   wait_condition:
+           type: AWS::CloudFormation::WaitCondition
+           depends_on: my_instance
            properties:
             Count: 1
             Handle: { get_resource: wait_condition_handle }
             Timeout: 600
-           depends_on: my_instance
-           type: "AWS::CloudFormation::WaitCondition"
+
   wait_condition_handle:
-           type: "AWS::CloudFormation::WaitConditionHandle"
-  server1_port: 
+           type: AWS::CloudFormation::WaitConditionHandle
+
+  cinder_volume:
+    type: "OS::Cinder::Volume"
+    properties:
+      availability_zone:
+        get_param: availability_zone
+      size:
+        get_param: volume_size
+      volume_type:
+        get_param: volume_type
+
+  volume_attachment:
+    type: "OS::Cinder::VolumeAttachment"
+    properties:
+      instance_uuid:
+        get_resource: my_instance
+      mountpoint: /dev/vdb
+      volume_id:
+        get_resource: cinder_volume
+
+  my_instance_port: 
+    type: "OS::Neutron::Port"
     properties: 
       network_id: 
         get_param: net_id
-      security_groups: { get_param: security_groups }
-    type: "OS::Neutron::Port"
-  volume_attachment: 
-    properties: 
-      instance_uuid: 
-        get_resource: my_instance
-      mountpoint: /dev/vdb
-      volume_id: 
-        get_resource: cinder_volume
-    type: "OS::Cinder::VolumeAttachment"
+      security_groups: 
+        get_param: security_groups 
+
+outputs:
+  instance_id:
+    description: "Resource ID assigned to the newly created instance"
+    value:
+      get_resource: my_instance
+  instance_ip:
+    description: "Public IP address of the newly created Nova instance."
+    value:
+      get_attr:
+        - my_instance
+        - first_address
+  manageURL:
+    description: "phpMyAdmin can be accessed at"
+    value:
+      str_replace:
+        params:
+          host:
+            get_attr:
+              - my_instance
+              - first_address
+        template: "http://host/phpmyadmin"
+  volume_id:
+    description: "Resource ID assigned to the newly created volume attached to instance"
+    value:
+      get_resource: cinder_volume
 
 

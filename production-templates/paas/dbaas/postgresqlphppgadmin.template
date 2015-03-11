@@ -25,8 +25,7 @@ parameters:
   security_groups:
     type: comma_delimited_list
     description: List of security group names or IDs
-    default:
-       - allow_all
+    default: [ dbaas ]
   net_id:
     type: string
     description: ID of public (or private) sub network into which servers get deployed
@@ -39,8 +38,9 @@ parameters:
           min: 4
       - 
         allowed_pattern: "[a-zA-Z0-9-_]*"
-    description: "db_name must contain only alphanumeric characters or _ or -"
+        description: "db_name must contain only alphanumeric characters or _ or -"
     default: tempdatabase
+    description: "Database name"
   db_username: 
     constraints: 
       - 
@@ -82,53 +82,78 @@ parameters:
     description: "Root password for PostgreSQL"
     hidden: true
     type: string
-  volume_size: 
-    constraints: 
-      - 
+  volume_size:
+    constraints:
+      -
         description: "must be between 1 and 1024 Gb."
-        range: 
+        range:
           max: 1024
           min: 1
     default: 1
     description: "Size of the volume to be created."
     type: number
-  mountpoint:
-    type: string
-    description: The directory to provide to the user
-    default: /mnt/workingdir
   volume_type:
-    type: string
-    description: Type of volume to be used (encrypted or not)
     default: data
+    description: "Type of volume to be used (encrypted or not)"
+    type: string
+  mountpoint:
+    default: /mnt/workingdir
+    description: "The directory to provide to the user"
+    type: string
 
 resources:
   my_instance:
     type: OS::Nova::Server
     properties:
-      name: { get_param: vm_name }
-      key_name: { get_param: key_name }
+      availability_zone:
+        get_param: availability_zone
+      flavor:
+        get_param: instance_type
       image: PRISMA-Ubuntu-14.04-x86_64
-      availability_zone: { get_param: availability_zone }
-      flavor: { get_param: instance_type }
+      key_name:
+        get_param: key_name
+      name:
+        get_param: vm_name
       networks:
-        - port: { get_resource: my_instance_port }
+        -
+          port:
+            get_resource: my_instance_port
       user_data_format: RAW
       user_data:
-        str_replace:
+         str_replace:
+          params:
+            db_name:
+              get_param: db_name
+            db_password:
+              get_param: db_password
+            db_rootpassword:
+              get_param: db_root_password
+            db_user: 
+              get_param: db_username
+            device_name: /dev/vdb
+            mountpoint: 
+              get_param: mountpoint
+            $wait_handle$: { get_resource: wait_condition_handle}
+
           template: |
             #!/bin/bash -v
-            # An error exit function
-            function error_exit
-            { 
-             echo "$1" 1>&2 
-             exit 1
+
+            # Helper function to signal error condition
+            function notify_err
+            {
+              message=$1
+              curl -X PUT -H 'Content-Type:application/json' -d "{\"Status\" : \"FAILURE\",\"Reason\" : \"$message\",\"UniqueId\" : \"ID1\",\"Data\" : \"Server Configuration NOT OK\"}" \
+              "$wait_handle$"
+              exit 1
             }
+            sudo su -
             useradd -s /bin/bash -m postgres
             echo "postgres:db_rootpassword" | chpasswd
             echo 'postgres ALL=(ALL) ALL' | sudo tee -a /etc/sudoers
             sed -i "s:^127.0.0.1:127.0.0.1 $HOSTNAME:" /etc/hosts
             apt-get update
             apt-get install -y openssh-server openssl bash libssl1.0.0
+            
             #Install PostgreSQL  
             echo "deb http://apt.postgresql.org/pub/repos/apt/ precise-pgdg main" >> /etc/apt/sources.list
             wget --quiet -O - http://apt.postgresql.org/pub/repos/apt/ACCC4CF8.asc | sudo apt-key add -
@@ -136,95 +161,82 @@ resources:
             # Configure Postgres Remote Access
             sed -i "s/#listen_addresses = 'localhost'/listen_addresses = '*'/g" /etc/postgresql/9.3/main/postgresql.conf
             echo "host    all             all             0.0.0.0/0               md5" | tee -a /etc/postgresql/9.3/main/pg_hba.conf
-            sudo service postgresql restart
-            sudo service postgresql stop
+            service postgresql restart
+            service postgresql stop
+            
             #Allow user to use volume
-            mkdir -p mountpoint/data  
-            mkfs.ext4 device_name
-            if [ $? -eq 0 ]; then
-              mount device_name mountpoint/data
-              echo "Successfully device mounted"
-              echo 'device_name mountpoint/data ext4 defaults 0 0' >> /etc/fstab
-              chmod -R 0700 mountpoint/data
-              #Change PostgreSQL default data directory
-              sudo pg_dropcluster 9.3 main
-              #clean  the directory before create cluster,usually you found lost+found directory
-              rm -r -f mountpoint/data/*
-              sudo pg_createcluster -d mountpoint/data --start-conf auto 9.3 main
-              if [ $? -eq 0 ]; then 
-                sudo chown -R postgres:postgres mountpoint/data
-                sudo cp -R -p /etc/postgresql/9.3/main mountpoint/data
-                ln -s mountpoint/data /etc/postgresql/9.3/main
-                sed -i "s:^data_directory.*$:data_directory\t\t= 'mountpoint/data':" /etc/postgresql/9.3/main/postgresql.conf
-                sudo service postgresql restart
-                # Setup postgres password, create a user and db
-                sudo -u postgres psql -c "alter role postgres password 'db_rootpassword';" 
-                sudo -u postgres psql -c "create role db_user password 'db_password' SUPERUSER CREATEDB CREATEROLE INHERIT;" 
-                sudo -u postgres createdb db_name -O db_user;
-                sudo -u postgres psql -c "alter role db_user LOGIN;" 
-                # Apache2 installation
-                apt-get install -y apache2
-                echo "ServerName localhost" | tee /etc/apache2/httpd.conf
-                service apache2 restart
-                # PHP installation
-                apt-get install -q -y php5 libapache2-mod-php5 php5-mcrypt
-                # phpPgAdmin installation
-                apt-get install -q -y phppgadmin php5-pgsql
-                sed -i "s:^allow from 127:#allow from 127:" /etc/apache2/conf.d/phppgadmin 
-                sed -i "s/^#.*$allow from all/allow from all/" /etc/apache2/conf.d/phppgadmin
-                sudo cp /etc/apache2/conf.d/phppgadmin /etc/apache2/conf-available/phppgadmin.conf
-                sed -i "s:^$conf['extra_login_security'].*$:$conf['extra_login_security'] = 'false':" /usr/share/phppgadmin/conf/config.inc.php
-                sed -i "s:^post_max_size.*$:post_max_size = 20M:" /etc/php5/apache2/php.ini
-                sed -i "s:^upload_max_filesize.*$:upload_max_filesize = 20M:" /etc/php5/apache2/php.ini
-                sudo a2enconf phppgadmin
-                sudo service apache2 reload
-                sudo service apache2 restart
-                sudo service postgresql restart
-                chmod +x /etc/init.d/apache2
-                update-rc.d apache2 defaults
-                chmod +x /etc/init.d/postgresql
-                update-rc.d postgresql defaults
+            mkdir -p mountpoint
+            mkfs.ext4 device_name && mount device_name mountpoint || notify_err "Some problems occurred with block device"
+            echo "Successfully device mounted"
+            echo 'device_name mountpoint ext4 defaults 0 0' >> /etc/fstab
+            mkdir mountpoint/data
+            chmod -R 0755 mountpoint
+            
+            #Change PostgreSQL default data directory
+            pg_dropcluster 9.3 main
+            pg_createcluster -d mountpoint/data --start-conf auto 9.3 main
+            [[ $? -eq 0 ]] || notify_err "Some problems occurred while creating pg cluster"
+            chown -R postgres:postgres mountpoint/data
+            cp -R -p /etc/postgresql/9.3/main mountpoint/data
+            ln -s mountpoint/data /etc/postgresql/9.3/main
+            sed -i "s:^data_directory.*$:data_directory\t\t= 'mountpoint/data':" /etc/postgresql/9.3/main/postgresql.conf
+            service postgresql restart || notify_err "Some problems occurred with PostgreSQL installation"
+            
+            # Setup postgres password, create a user and db
+            sudo -u postgres psql -c "alter role postgres password 'db_rootpassword';" 
+            sudo -u postgres psql -c "create role db_user password 'db_password' SUPERUSER CREATEDB CREATEROLE INHERIT;" 
+            sudo -u postgres createdb db_name -O db_user;
+            sudo -u postgres psql -c "alter role db_user LOGIN;" 
+            
+            # Apache2 installation
+            apt-get install -y apache2
+            echo "ServerName localhost" | tee /etc/apache2/httpd.conf
+            service apache2 restart
+            # PHP installation
+            apt-get install -q -y php5 libapache2-mod-php5 php5-mcrypt
+            # phpPgAdmin installation
+            apt-get install -q -y phppgadmin php5-pgsql
+            sed -i "s:^allow from 127:#allow from 127:" /etc/apache2/conf.d/phppgadmin 
+            sed -i "s/^#.*$allow from all/allow from all/" /etc/apache2/conf.d/phppgadmin
+            cp /etc/apache2/conf.d/phppgadmin /etc/apache2/conf-available/phppgadmin.conf
+            sed -i "s:^$conf['extra_login_security'].*$:$conf['extra_login_security'] = 'false':" /usr/share/phppgadmin/conf/config.inc.php
+            sed -i "s:^post_max_size.*$:post_max_size = 20M:" /etc/php5/apache2/php.ini
+            sed -i "s:^upload_max_filesize.*$:upload_max_filesize = 20M:" /etc/php5/apache2/php.ini
+            a2enconf phppgadmin
+            php5enmod mcrypt 
+            service apache2 restart || notify_err "Some problems occurred with phppgadmin installation/configuration" 
+            
+            # install init script links to configure service autostart at reboot
+            update-rc.d apache2 defaults
+            update-rc.d postgresql defaults
 
-                echo "---Personalizzo il file di configurazione di Zabbix Agent"
-                wget "http://repo.zabbix.com/zabbix/2.2/ubuntu/pool/main/z/zabbix-release/zabbix-release_2.2-1+precise_all.deb"
-                dpkg -i zabbix-release_2.2-1+precise_all.deb
-                apt-get update
-                apt-get install zabbix-agent
-                zabbix_metrics="zabbix-metrics.infn.ponsmartcities-prisma.it"
-                zabbix_watcher="zabbix-watcher.infn.ponsmartcities-prisma.it"
-                sed -i -e "s/^Server=.*/Server=${zabbix_metrics},${zabbix_watcher}/" /etc/zabbix/zabbix_agentd.conf
-                sed -i -e "s/^ServerActive=.*/ServerActive=${zabbix_metrics},${zabbix_watcher}/" /etc/zabbix/zabbix_agentd.conf
-                sed -i -e "s/^Hostname=.*/Hostname=${HOSTNAME//./_}/" /etc/zabbix/zabbix_agentd.conf
-                service zabbix-agent restart
-                echo "---Personalizzo il file di configurazione di Puppet Agent"
-                puppetMaster="puppet-master.infn.ponsmartcities-prisma.it"
-                puppet agent --server $puppetMaster --onetime --no-daemonize --verbose
-  
-                curl -X PUT -H 'Content-Type:application/json'\
-                -d '{"Status" : "SUCCESS","Reason" : "postgres and phpadmin installed OK","UniqueId" : "ID1","Data" : "Server Configuration OK"}' \
-               "$wait_handle$"     
-              else
-                curl -X PUT -H 'Content-Type:application/json'\
-               -d '{"Status" : "FAILURE","Reason" : "postgres NOK","UniqueId" : "ID1","Data" : "Server Configuration NOT OK"}' \
-               "$wait_handle$"
-                error_exit "POSTGRES CLUSTER NOT CREATED" 
-               fi
-            else
-               curl -X PUT -H 'Content-Type:application/json'\
-               -d '{"Status" : "FAILURE","Reason" : "Mount Device NOK","UniqueId" : "ID1","Data" : "Server Configuration NOT OK"}' \
-             "$wait_handle$"
-               error_exit "MOUNT device NOT OK" 
-            fi
+            # Zabbix agent installation
+            echo "Zabbix Agent installation and configuration"
+            wget http://repo.zabbix.com/zabbix/2.2/ubuntu/pool/main/z/zabbix-release/zabbix-release_2.2-1+trusty_all.deb
+            dpkg -i zabbix-release_2.2-1+trusty_all.deb
+            apt-get update   
+            apt-get install -y zabbix-agent
+            zabbix_metrics="zabbix-metrics.infn.ponsmartcities-prisma.it"
+            zabbix_watcher="zabbix-watcher.infn.ponsmartcities-prisma.it"
+            sed -i -e "s/^Server=.*/Server=${zabbix_metrics},${zabbix_watcher}/" /etc/zabbix/zabbix_agentd.conf
+            sed -i -e "s/^ServerActive=.*/ServerActive=${zabbix_metrics},${zabbix_watcher}/" /etc/zabbix/zabbix_agentd.conf
+            sed -i -e "s/^Hostname=.*/Hostname=${HOSTNAME//./_}/" /etc/zabbix/zabbix_agentd.conf
+            service zabbix-agent restart || notify_err "Some problems occurred with Zabbix Agent installation/configuration"
+
+            # Puppet agent installation
+            echo "Puppet agent installation and configuration"
+            wget https://apt.puppetlabs.com/puppetlabs-release-trusty.deb
+            dpkg -i puppetlabs-release-trusty.deb
+            apt-get update
+            apt-get install -y puppet
+            puppetMaster="puppet-master.infn.ponsmartcities-prisma.it"
+            puppet agent --server $puppetMaster --onetime --no-daemonize --verbose
+            [[ $? -eq 0 ]] || notify_err "Puppet agent failed. See logs for details"
+
+            curl -X PUT -H 'Content-Type:application/json' -d '{"Status" : "SUCCESS","Reason" : "mysql and phpmyadmin installed OK","UniqueId" : "ID1","Data" : "Server Configuration OK"}' \
+            "$wait_handle$"
             exit
-          params:
-            db_rootpassword: { get_param: db_root_password }
-            db_name: { get_param: db_name }
-            db_user: { get_param: db_username }
-            db_password: { get_param: db_password }
-            mountpoint: { get_param: mountpoint }
-            device_name: /dev/vdb
-            $wait_handle$: { get_resource: wait_condition_handle}
-    
+            
   wait_condition:
            type: AWS::CloudFormation::WaitCondition
            depends_on: my_instance
@@ -237,23 +249,32 @@ resources:
            type: AWS::CloudFormation::WaitConditionHandle
 
   cinder_volume:
-    type: OS::Cinder::Volume
+    type: "OS::Cinder::Volume"
     properties:
-      size: { get_param: volume_size }
-      availability_zone: { get_param: availability_zone }
-      volume_type: { get_param: volume_type }
-  volume_attachment:
-    type: OS::Cinder::VolumeAttachment
-    properties:
-      volume_id: { get_resource: cinder_volume }
-      instance_uuid: { get_resource: my_instance }
-      mountpoint: /dev/vdb
-  my_instance_port:
-    type: OS::Neutron::Port
-    properties:
-      network_id: { get_param: net_id }
-      security_groups: { get_param: security_groups }
+      availability_zone:
+        get_param: availability_zone
+      size:
+        get_param: volume_size
+      volume_type:
+        get_param: volume_type
 
+  volume_attachment:
+    type: "OS::Cinder::VolumeAttachment"
+    properties:
+      instance_uuid:
+        get_resource: my_instance
+      mountpoint: /dev/vdb
+      volume_id:
+        get_resource: cinder_volume
+
+  my_instance_port:
+    type: "OS::Neutron::Port"
+    properties:
+      network_id:
+        get_param: net_id
+      security_groups: 
+        get_param: security_groups 
+    
 outputs: 
   instance_id: 
     description: "Resource ID assigned to the newly created instance"
