@@ -243,7 +243,7 @@ resources:
            properties:
             Count: 1
             Handle: { get_resource: wait_condition_handle }
-            Timeout: 600
+            Timeout: 1800
 
   wait_condition_handle:
            type: AWS::CloudFormation::WaitConditionHandle
