@@ -41,9 +41,6 @@ parameters:
     type: string
     description: public IP for wget download files, .jpeg, ecc. for custom configuration
     default: cloudrepo.cloud.ba.infn.it
-  net_id:
-    type: string
-    description: ID of public (or private) sub network into which servers get deployed
   admin_password:
     type: string
     description: Password for Administration
