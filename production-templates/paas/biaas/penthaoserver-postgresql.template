@@ -1,0 +1,307 @@
+heat_template_version: 2013-05-23
+
+description: Template to deploy a single user data instance (jdk7 + Pentaho 5.1 + PostgreSQL 9.3)
+
+parameters:
+  key_name:
+    type: string
+    description: Name of a KeyPair 
+  vm_name:
+    type: string
+    label: VM name
+  instance_type:
+    type: string
+    label: Instance Type
+    description: Type of instance (flavor) to be used-large.bronze for extern
+    default: m1.large
+  availability_zone:
+    type: string
+    description: The Availability Zone to launch the instance.
+    default: nova
+  scheduler_hints:
+    type: string
+    description: The Host Aggregate to launch the instance in form of '{host:myhost}'.
+    default: nova
+  net_id:
+    type: string
+    description: ID of public (or private) sub network into which servers get deployed
+  security_groups:
+    type: comma_delimited_list
+    description: List of security group names or IDs
+    default: [biaas]
+  port1:
+    type: string
+    description: port for default Postgresql repository
+    default: 5432
+  port2:
+    type: string
+    description: port for Tomcat e Pentaho
+    default: 8080
+  ip_repo:
+    type: string
+    description: public IP for wget download files, .jpeg, ecc. for custom configuration
+    default: cloudrepo.cloud.ba.infn.it
+  net_id:
+    type: string
+    description: ID of public (or private) sub network into which servers get deployed
+  admin_password:
+    type: string
+    description: Password for Administration
+    default: admin
+    hidden: true
+  volume_size:
+    type: number
+    description: Size of the volume to be created.
+    default: 1
+  mountpoint:
+    type: string
+    description: The directory to provide to the user
+    default: /mnt/workingdir
+  volume_type:
+    type: string
+    description: Type of volume to be used (encrypted or not)
+    default: data
+  db_root_password: 
+    constraints: 
+      - 
+        description: "root password must be between 4 and 41 characters"
+        length: 
+          max: 41
+          min: 4
+      - 
+        allowed_pattern: "[a-zA-Z0-9]*"
+        description: "db_password must contain only alphanumeric characters"
+    default: admin
+    description: "Root password for POSTGRESQL"
+    hidden: true
+    type: string
+
+resources:
+  user_data_instance:
+    type: OS::Nova::Server
+    properties:
+      name: { get_param: vm_name }
+      key_name: { get_param: key_name }
+      image: PRISMA-Ubuntu-14.04-x86_64
+      flavor: { get_param: instance_type }
+      availability_zone: { get_param: availability_zone }
+      networks:
+        - port: { get_resource: user_data_instance_port }
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+            # Helper function to signal error condition
+            function notify_err
+            {
+             message=$1
+             curl -X PUT -H 'Content-Type:application/json' -d "{\"Status\" : \"FAILURE\",\"Reason\" : \"$message\",\"UniqueId\" : \"ID1\",\"Data\" : \"Server Configuration NOT OK\"}" \
+             "$wait_handle$"
+             exit 1
+            }
+            sudo su -
+            # Create Linux User Account
+            useradd -s /bin/bash -m pentaho
+            echo "pentaho:admin_password" | chpasswd
+            mkdir -p /home/pentaho/server/biserver-ce
+            mkdir -p .pentaho
+            echo 'pentaho ALL=(ALL) ALL' | sudo tee -a /etc/sudoers
+            apt-get update 
+            sed -i "s:^127.0.0.1:127.0.0.1 $HOSTNAME:" /etc/hosts
+            apt-get install -y openssh-server openssl bash libssl1.0.0
+            #install jdk
+            apt-get install -y openjdk-7-jdk 
+            echo 'JAVA_HOME="/usr/lib/jvm/java-1.7.0-openjdk-amd64"' >> /etc/environment
+            #dowload and unzip pentaho server
+            apt-get install -y zip unzip
+            wget http://sourceforge.net/projects/pentaho/files/Business%20Intelligence%20Server/5.1/biserver-ce-5.1.0.0-752.zip
+            unzip -n biserver-ce-5.1.0.0-752.zip -d /home/pentaho/server
+            echo 'CATALINA_HOME="/home/pentaho/server/biserver-ce/tomcat"' >> /etc/environment
+            # Edit tomcat-users.xml configuration file adding pentaho users
+            sed -i "s|<tomcat-users>|<tomcat-users>\n<role rolename=\"manager-gui\"/>\n<role rolename=\"admin-gui\"/>\n<role rolename=\"PENTAHO_ADMIN\"/>\n<user username=\"admin\" password=\"admin_password\" roles=\"manager-gui,admin-gui\"/>|g" /home/pentaho/server/biserver-ce/tomcat/conf/tomcat-users.xml
+            #Install PostgreSQL  
+            echo "deb http://apt.postgresql.org/pub/repos/apt/ precise-pgdg main" >> /etc/apt/sources.list
+            wget --quiet -O - http://apt.postgresql.org/pub/repos/apt/ACCC4CF8.asc | sudo apt-key add -
+            apt-get install -y postgresql-9.3 postgresql-contrib
+            # Configure Postgres Remote Access
+            sed -i "s/#listen_addresses = 'localhost'/listen_addresses = '*'/g" /etc/postgresql/9.3/main/postgresql.conf
+            echo "host    all             all             0.0.0.0/0               md5" | tee -a /etc/postgresql/9.3/main/pg_hba.conf
+            echo "local    all             pentaho_user                            md5" | tee -a /etc/postgresql/9.3/main/pg_hba.conf
+            echo "local    all             hibuser                            md5" | tee -a /etc/postgresql/9.3/main/pg_hba.conf
+            echo "local    all             jcr_user                            md5" | tee -a /etc/postgresql/9.3/main/pg_hba.conf
+            sudo service postgresql restart
+            sudo service postgresql stop
+            #configure postgresql as BA repository DB
+            sed -i "s/password/admin_password/g" /home/pentaho/server/biserver-ce/data/postgresql/create_quartz_postgresql.sql
+            sed -i "s/password/admin_password/g" /home/pentaho/server/biserver-ce/data/postgresql/create_repository_postgresql.sql
+            sed -i "s/password/admin_password/g" /home/pentaho/server/biserver-ce/data/postgresql/create_jcr_postgresql.sql
+            sed -i "s|connect.*$|connect quartz postgres|g" /home/pentaho/server/biserver-ce/data/postgresql/create_quartz_postgresql.sql
+            sed -i "s|connect.*$|connect quartz postgres|g" /home/pentaho/server/biserver-ce/data/postgresql/create_repository_postgresql.sql
+            sed -i "s|connect.*$|connect quartz postgres|g" /home/pentaho/server/biserver-ce/data/postgresql/create_jcr_postgresql.sql
+            #Allow user to use volume
+            mkdir -p mountpoint/data
+            chmod 0700 mountpoint/data
+            mkfs.ext4 device_name && mount device_name mountpoint/data || notify_err "Some problems occurred with block device"
+            echo "Successfully device mounted"
+            #For reboot instance
+            echo 'device_name mountpoint/data ext4 defaults 0 0' >> /etc/fstab
+            #Change PostgreSQL default data directory
+            sudo pg_dropcluster 9.3 main
+            #DA FARE SOLO IN CASO DI TEST-clean  the directory 
+            #rm -r -f mountpoint/data/*
+            sudo pg_createcluster -e UTF-8 -d mountpoint/data --start-conf auto 9.3 main
+            [[ $? -eq 0 ]] || notify_err "Some problems occurred creation pg cluster"
+            sudo chown -R postgres:postgres mountpoint/data
+            sudo cp -R -p /etc/postgresql/9.3/main mountpoint/data
+            ln -s mountpoint/data /etc/postgresql/9.3/main
+            sed -i "s:^data_directory.*$:data_directory\t\t= 'mountpoint/data':" /etc/postgresql/9.3/main/postgresql.conf
+            sudo service postgresql restart || notify_err "Some problems occurred with postgres installation/configuration"
+            # Setup postgres password
+            sudo -u postgres psql -c "alter role postgres password 'db_rootpassword';" 
+            sudo -u postgres psql -a -f /home/pentaho/server/biserver-ce/data/postgresql/create_quartz_postgresql.sql
+            sudo -u postgres psql -d quartz -c "CREATE TABLE \"QRTZ\" (name VARCHAR(200) NOT NULL, PRIMARY KEY (name)); ALTER TABLE \"QRTZ\" OWNER TO pentaho_user;" 
+            sudo -u postgres psql -a -f /home/pentaho/server/biserver-ce/data/postgresql/create_repository_postgresql.sql
+            sudo -u postgres psql -a -f /home/pentaho/server/biserver-ce/data/postgresql/create_jcr_postgresql.sql
+            #Configuring the context.xml with postgresql jdbc configuration, user and password
+            sed -i "s|docbase=".*$"|docbase=\"/home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/\">|g" /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/META-INF/context.xml
+            sed -i "s|org.hsqldb.jdbcDriver|org.postgresql.Driver|g" /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/META-INF/context.xml
+            sed -i "s|factory=".*$"|factory=\"org.apache.commons.dbcp.BasicDataSourceFactory\"|g" /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/META-INF/context.xml
+            sed -i "s|password=".*$"|password=\"admin_password\"|g" /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/META-INF/context.xml
+            sed -i "s|jdbc:hsqldb:hsql:\/\/localhost\/hibernate|jdbc:postgresql:\/\/localhost:5432\/hibernate|g" /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/META-INF/context.xml
+            sed -i "s|select count.*$|select 1\" \/>|g" /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/META-INF/context.xml
+            #import already ad-hoc modified version of web.xml file fo Filter/Listner configuration
+            mv /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/WEB-INF/web.xml /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/WEB-INF/web.xml.OLD
+            wget http://ip_repo/web.xml -O /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/WEB-INF/web.xml
+            [[ $? -eq 0 ]] || notify_err "Some problems occurred with ip repository for pentaho"
+            #import already ad-hoc modified version of repository.xml file to PostgreSQL configuration
+            mv /home/pentaho/server/biserver-ce/pentaho-solutions/system/jackrabbit/repository.xml /home/pentaho/server/biserver-ce/pentaho-solutions/system/jackrabbit/repository.xml.OLD
+            wget http://ip_repo/repository.xml -O /home/pentaho/server/biserver-ce/pentaho-solutions/system/jackrabbit/repository.xml
+            #Configuring the repository.xml with postgresql user password
+            sed -i "s/value=\"password/value=\"admin_password/g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/jackrabbit/repository.xml
+            # Change the hibernate config files
+            sed -i "s|system\/hibernate\/hsql.hibernate.cfg.xml|system\/hibernate\/postgresql.hibernate.cfg.xml|g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/hibernate/hibernate-settings.xml
+            sed -i "s|org.hsqldb.jdbcDriver|org.postgresql.Driver|g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/applicationContext-spring-security-hibernate.properties
+            sed -i "s|jdbc:hsqldb:hsql:\/\/localhost:9001\/hibernate|jdbc:postgresql:\/\/localhost:5432\/hibernate|g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/applicationContext-spring-security-hibernate.properties
+            sed -i "s/=password/=admin_password/g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/applicationContext-spring-security-hibernate.properties
+            sed -i "s/=password/=admin_password/g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/dialects/postgresql/applicationContext-spring-security-hibernate.properties
+            # Configuring the Quartz Scheduler for PostgreSQL
+            sed -i "s|#.*$org.quartz.jobStore.driverDelegateClass.*$|org.quartz.jobStore.driverDelegateClass = org.quartz.impl.jdbcjobstore.PostgreSQLDelegate|g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/quartz/quartz.properties
+            # Disable quartz embedded listner
+            sed -i "s|<bean id=\"quartzSystemListener\" class=\"org.pentaho.platform.scheduler2.quartz.EmbeddedQuartzSystemListener\" \/>|<!-- \n <bean id=\"quartzSystemListener\" class=\"org.pentaho.platform.scheduler2.quartz.EmbeddedQuartzSystemListener\" \/> \n -->|g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/systemListeners.xml
+            # Disable suggestion of pentaho user
+            sed -i "s|<login-show-users-list>true</login-show-users-list>|<login-show-users-list>false</login-show-users-list>|g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/pentaho.xml
+            sed -i "s|<login-show-sample-users-hint>true</login-show-sample-users-hint>|<login-show-sample-users-hint>false</login-show-sample-users-hint>|g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/pentaho.xml
+            sed -i "s|<login-show-users-list>true</login-show-users-list>|<login-show-users-list>false</login-show-users-list>|g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/applicationContext-spring-security-memory.xml
+            # Increase the CSV File Upload Limit
+            sed -i "s/<max-file-limit>10000000/<max-file-limit>10000000000/g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/pentaho.xml
+            sed -i "s/<max-folder-limit>500000000/<max-folder-limit>500000000000/g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/pentaho.xml
+            # Enable JPivot in the User Console
+            sed -i "s|<show-deprecation-warning>.$*|<show-deprecation-warning>false</show-deprecation-warning>|g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/pentaho-jpivot-plugin/settings.xml
+            #Customise Login
+            cp /home/pentaho/server/biserver-ce/pentaho-solutions/system/common-ui/resources/themes/crystal/images/login-crystal-bg.jpeg /home/pentaho/server/biserver-ce/pentaho-solutions/system/common-ui/resources/themes/crystal/images/login-crystal-bgOLD.jpeg
+            wget http://ip_repo/login-crystal-bg.jpg -O /home/pentaho/server/biserver-ce/pentaho-solutions/system/common-ui/resources/themes/crystal/images/login-crystal-bg.jpeg
+            #import already ad-hoc created file /etc/init.d/pentaho
+            wget http://ip_repo/pentaho -O /etc/init.d/pentaho
+            #import already ad-hoc modified version of start-pentaho.sh
+            #  for reboot?????
+            chmod 777 /home/pentaho/server/biserver-ce/start-pentaho.sh
+            mv /home/pentaho/server/biserver-ce/start-pentaho.sh /home/pentaho/server/biserver-ce/start-pentaho.sh.OLD
+            wget http://ip_repo/start-pentaho.sh -O /home/pentaho/server/biserver-ce/start-pentaho.sh
+            chmod +x /etc/init.d/pentaho
+            update-rc.d pentaho defaults
+            # Driver JDBC (default postgresql 9.1, mysql 5.1, hsqldb e h2)
+            wget -O /usr/share/java/postgresql-9.2-1003.jdbc4.jar jdbc.postgresql.org/download/postgresql-9.2-1003.jdbc4.jar
+            ln -s /usr/share/java/postgresql-9.2-1003.jdbc4.jar /usr/share/java/postgresql-9.2-jdbc4.jar
+            ln -s /usr/share/java/postgresql-9.2-jdbc4.jar /home/pentaho/server/biserver-ce/tomcat/lib/postgresql-9.2-jdbc4.jar
+            sudo chmod 770 /home/pentaho/server/biserver-ce/*.sh
+            sudo chmod 770 /home/pentaho/server/biserver-ce/tomcat/lib/*
+            #Start Tomcat and Pentaho BA server
+            /home/pentaho/server/biserver-ce/start-pentaho.sh
+            #Checking that pentaho/tomcat service is up before to run curl command
+            MY_CHECK=4
+            while (( $MY_CHECK )); do
+            wget http://127.0.0.1:8080/pentaho
+            if [$? -eq 0]; then 
+              MY_CHECK=$?
+            else
+              let MY_CHECK-=1
+            fi
+            sleep 1;
+            done
+            # Delete default user pat, suzy, tiffany
+            curl -u admin:password -X PUT -H"Content-Type: application/json" http://127.0.0.1:8080/pentaho/api/userroledao/deleteUsers?userNames=tiffany
+            curl -u admin:password -X PUT -H"Content-Type: application/json" http://127.0.0.1:8080/pentaho/api/userroledao/deleteUsers?userNames=pat
+            curl -u admin:password -X PUT -H"Content-Type: application/json" http://127.0.0.1:8080/pentaho/api/userroledao/deleteUsers?userNames=suzy
+            [[ $? -eq 0 ]] || notify_err "Some problems occurred with ip http://127.0.0.1:8080/pentaho"
+            # change default admin password
+            curl -u admin:password -X PUT -H"Content-Type: application/json" -d '{"userName": "admin", "password" : "admin_password"}' http://127.0.0.1:8080/pentaho/api/userroledao/updatePassword
+            curl -X PUT -H 'Content-Type:application/json' -d '{"Status" : "SUCCESS","Reason" : "Pentaho with Postgresql installed OK","UniqueId" : "ID1","Data" : "Server Configuration OK"}' \
+            "$wait_handle$"     
+            exit            
+          params:
+            admin_password: { get_param: admin_password }
+            db_rootpassword:{ get_param: db_root_password}
+            ip_repo: { get_param: ip_repo }
+            mountpoint: { get_param: mountpoint }
+            device_name: /dev/vdb
+            $wait_handle$: { get_resource: wait_condition_handle}
+
+  wait_condition:
+    type: AWS::CloudFormation::WaitCondition
+    depends_on: user_data_instance
+    properties:
+     Count: 1
+     Handle: { get_resource: wait_condition_handle }
+     Timeout: 1800
+
+  wait_condition_handle:
+           type: AWS::CloudFormation::WaitConditionHandle
+
+  cinder_volume:
+    type: OS::Cinder::Volume
+    properties:
+      size: { get_param: volume_size }
+      availability_zone: { get_param: availability_zone }
+      volume_type: { get_param: volume_type }
+  volume_attachment:
+    type: OS::Cinder::VolumeAttachment
+    properties:
+      volume_id: { get_resource: cinder_volume }
+      instance_uuid: { get_resource: user_data_instance }
+      mountpoint: /dev/vdb
+
+  user_data_instance_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_param: net_id }
+      security_groups: { get_param: security_groups }
+
+outputs:
+  vmIp:
+    description: The IP address of the deployed instance
+    value: { get_attr: [user_data_instance, first_address] }
+  vmUuid:
+    description: Resource ID assigned to the newly created instance
+    value: { get_resource: user_data_instance }
+  vmName:
+    description: vm name 
+    value: { get_param: vm_name }
+  serviceType: 
+    description: List of services and ports to be monitored 
+    value:
+      str_replace:
+        template: postgresql:port1, pentaho:port2
+        params:
+          port1: { get_param: port1 } 
+          port2: { get_param: port2 } 
+  URL: 
+    description: Pentaho BI Community Edition can be accessed at 
+    value:
+      str_replace:
+        template: http://host:8080/pentaho
+        params:
+          host: { get_attr: [user_data_instance, first_address] } 
+  volumeUuid:
+    description: Resource ID assigned to the newly created volume attached to instance
+    value: { get_resource: cinder_volume }
