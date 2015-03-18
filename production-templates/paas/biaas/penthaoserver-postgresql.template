@@ -22,9 +22,6 @@ parameters:
     type: string
     description: The Host Aggregate to launch the instance in form of '{host:myhost}'.
     default: nova
-  net_id:
-    type: string
-    description: ID of public (or private) sub network into which servers get deployed
   security_groups:
     type: comma_delimited_list
     description: List of security group names or IDs
@@ -41,6 +38,9 @@ parameters:
     type: string
     description: public IP for wget download files, .jpeg, ecc. for custom configuration
     default: cloudrepo.cloud.ba.infn.it
+  net_id:
+    type: string
+    description: ID of public (or private) sub network into which servers get deployed
   admin_password:
     type: string
     description: Password for Administration
@@ -127,8 +127,8 @@ resources:
             echo "local    all             pentaho_user                            md5" | tee -a /etc/postgresql/9.3/main/pg_hba.conf
             echo "local    all             hibuser                            md5" | tee -a /etc/postgresql/9.3/main/pg_hba.conf
             echo "local    all             jcr_user                            md5" | tee -a /etc/postgresql/9.3/main/pg_hba.conf
-            sudo service postgresql restart
-            sudo service postgresql stop
+            service postgresql restart
+            service postgresql stop
             #configure postgresql as BA repository DB
             sed -i "s/password/admin_password/g" /home/pentaho/server/biserver-ce/data/postgresql/create_quartz_postgresql.sql
             sed -i "s/password/admin_password/g" /home/pentaho/server/biserver-ce/data/postgresql/create_repository_postgresql.sql
@@ -136,30 +136,32 @@ resources:
             sed -i "s|connect.*$|connect quartz postgres|g" /home/pentaho/server/biserver-ce/data/postgresql/create_quartz_postgresql.sql
             sed -i "s|connect.*$|connect quartz postgres|g" /home/pentaho/server/biserver-ce/data/postgresql/create_repository_postgresql.sql
             sed -i "s|connect.*$|connect quartz postgres|g" /home/pentaho/server/biserver-ce/data/postgresql/create_jcr_postgresql.sql
+
             #Allow user to use volume
-            mkdir -p mountpoint/data
-            chmod 0700 mountpoint/data
-            mkfs.ext4 device_name && mount device_name mountpoint/data || notify_err "Some problems occurred with block device"
+            mkdir -p mountpoint
+            mkfs.ext4 device_name && mount device_name mountpoint || notify_err "Some problems occurred with block device"
             echo "Successfully device mounted"
-            #For reboot instance
-            echo 'device_name mountpoint/data ext4 defaults 0 0' >> /etc/fstab
+            echo 'device_name mountpoint ext4 defaults 0 0' >> /etc/fstab
+            mkdir mountpoint/data
+            chmod -R 0755 mountpoint
+
             #Change PostgreSQL default data directory
-            sudo pg_dropcluster 9.3 main
-            #DA FARE SOLO IN CASO DI TEST-clean  the directory 
-            #rm -r -f mountpoint/data/*
-            sudo pg_createcluster -e UTF-8 -d mountpoint/data --start-conf auto 9.3 main
+            pg_dropcluster 9.3 main
+            pg_createcluster -e UTF-8 -d mountpoint/data --start-conf auto 9.3 main
             [[ $? -eq 0 ]] || notify_err "Some problems occurred creation pg cluster"
-            sudo chown -R postgres:postgres mountpoint/data
-            sudo cp -R -p /etc/postgresql/9.3/main mountpoint/data
+            chown -R postgres:postgres mountpoint/data
+            cp -R -p /etc/postgresql/9.3/main mountpoint/data
             ln -s mountpoint/data /etc/postgresql/9.3/main
             sed -i "s:^data_directory.*$:data_directory\t\t= 'mountpoint/data':" /etc/postgresql/9.3/main/postgresql.conf
-            sudo service postgresql restart || notify_err "Some problems occurred with postgres installation/configuration"
+            service postgresql restart || notify_err "Some problems occurred with postgres installation/configuration"
+            
             # Setup postgres password
             sudo -u postgres psql -c "alter role postgres password 'db_rootpassword';" 
             sudo -u postgres psql -a -f /home/pentaho/server/biserver-ce/data/postgresql/create_quartz_postgresql.sql
             sudo -u postgres psql -d quartz -c "CREATE TABLE \"QRTZ\" (name VARCHAR(200) NOT NULL, PRIMARY KEY (name)); ALTER TABLE \"QRTZ\" OWNER TO pentaho_user;" 
             sudo -u postgres psql -a -f /home/pentaho/server/biserver-ce/data/postgresql/create_repository_postgresql.sql
             sudo -u postgres psql -a -f /home/pentaho/server/biserver-ce/data/postgresql/create_jcr_postgresql.sql
+            
             #Configuring the context.xml with postgresql jdbc configuration, user and password
             sed -i "s|docbase=".*$"|docbase=\"/home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/\">|g" /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/META-INF/context.xml
             sed -i "s|org.hsqldb.jdbcDriver|org.postgresql.Driver|g" /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/META-INF/context.xml
@@ -167,23 +169,29 @@ resources:
             sed -i "s|password=".*$"|password=\"admin_password\"|g" /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/META-INF/context.xml
             sed -i "s|jdbc:hsqldb:hsql:\/\/localhost\/hibernate|jdbc:postgresql:\/\/localhost:5432\/hibernate|g" /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/META-INF/context.xml
             sed -i "s|select count.*$|select 1\" \/>|g" /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/META-INF/context.xml
+            
             #import already ad-hoc modified version of web.xml file fo Filter/Listner configuration
             mv /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/WEB-INF/web.xml /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/WEB-INF/web.xml.OLD
             wget http://ip_repo/web.xml -O /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/WEB-INF/web.xml
             [[ $? -eq 0 ]] || notify_err "Some problems occurred with ip repository for pentaho"
+            
             #import already ad-hoc modified version of repository.xml file to PostgreSQL configuration
             mv /home/pentaho/server/biserver-ce/pentaho-solutions/system/jackrabbit/repository.xml /home/pentaho/server/biserver-ce/pentaho-solutions/system/jackrabbit/repository.xml.OLD
             wget http://ip_repo/repository.xml -O /home/pentaho/server/biserver-ce/pentaho-solutions/system/jackrabbit/repository.xml
+            
             #Configuring the repository.xml with postgresql user password
             sed -i "s/value=\"password/value=\"admin_password/g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/jackrabbit/repository.xml
+            
             # Change the hibernate config files
             sed -i "s|system\/hibernate\/hsql.hibernate.cfg.xml|system\/hibernate\/postgresql.hibernate.cfg.xml|g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/hibernate/hibernate-settings.xml
             sed -i "s|org.hsqldb.jdbcDriver|org.postgresql.Driver|g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/applicationContext-spring-security-hibernate.properties
             sed -i "s|jdbc:hsqldb:hsql:\/\/localhost:9001\/hibernate|jdbc:postgresql:\/\/localhost:5432\/hibernate|g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/applicationContext-spring-security-hibernate.properties
             sed -i "s/=password/=admin_password/g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/applicationContext-spring-security-hibernate.properties
             sed -i "s/=password/=admin_password/g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/dialects/postgresql/applicationContext-spring-security-hibernate.properties
+            
             # Configuring the Quartz Scheduler for PostgreSQL
             sed -i "s|#.*$org.quartz.jobStore.driverDelegateClass.*$|org.quartz.jobStore.driverDelegateClass = org.quartz.impl.jdbcjobstore.PostgreSQLDelegate|g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/quartz/quartz.properties
+            
             # Disable quartz embedded listner
             sed -i "s|<bean id=\"quartzSystemListener\" class=\"org.pentaho.platform.scheduler2.quartz.EmbeddedQuartzSystemListener\" \/>|<!-- \n <bean id=\"quartzSystemListener\" class=\"org.pentaho.platform.scheduler2.quartz.EmbeddedQuartzSystemListener\" \/> \n -->|g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/systemListeners.xml
             # Disable suggestion of pentaho user
@@ -201,7 +209,6 @@ resources:
             #import already ad-hoc created file /etc/init.d/pentaho
             wget http://ip_repo/pentaho -O /etc/init.d/pentaho
             #import already ad-hoc modified version of start-pentaho.sh
-            #  for reboot?????
             chmod 777 /home/pentaho/server/biserver-ce/start-pentaho.sh
             mv /home/pentaho/server/biserver-ce/start-pentaho.sh /home/pentaho/server/biserver-ce/start-pentaho.sh.OLD
             wget http://ip_repo/start-pentaho.sh -O /home/pentaho/server/biserver-ce/start-pentaho.sh
