@@ -13,7 +13,7 @@ parameters:
     type: string
     label: Instance Type
     description: Type of instance (flavor) to be used-large.bronze for extern
-    default: m1.large
+    default: large.bronze
   availability_zone:
     type: string
     description: The Availability Zone to launch the instance.
