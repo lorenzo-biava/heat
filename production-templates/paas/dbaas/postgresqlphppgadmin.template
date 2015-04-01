@@ -64,8 +64,7 @@ parameters:
       - 
         allowed_pattern: "[a-zA-Z0-9]*"
         description: "db_password must contain only alphanumeric characters"
-    default: admin
-    description: "Database admin account password"
+    description: "Database  account password"
     hidden: true
     type: string
   db_root_password: 
@@ -77,8 +76,7 @@ parameters:
           min: 4
       - 
         allowed_pattern: "[a-zA-Z0-9]*"
-        description: "db_password must contain only alphanumeric characters"
-    default: admin
+        description: "root password must contain only alphanumeric characters"
     description: "Root password for PostgreSQL"
     hidden: true
     type: string
@@ -199,7 +197,7 @@ resources:
             sed -i "s:^allow from 127:#allow from 127:" /etc/apache2/conf.d/phppgadmin 
             sed -i "s/^#.*$allow from all/allow from all/" /etc/apache2/conf.d/phppgadmin
             cp /etc/apache2/conf.d/phppgadmin /etc/apache2/conf-available/phppgadmin.conf
-            sed -i "s:^$conf['extra_login_security'].*$:$conf['extra_login_security'] = 'false':" /usr/share/phppgadmin/conf/config.inc.php
+            sed -i 's/\(^.*conf\[.extra_login_security.\] =\) true/\1 false/' /usr/share/phppgadmin/conf/config.inc.php
             sed -i "s:^post_max_size.*$:post_max_size = 20M:" /etc/php5/apache2/php.ini
             sed -i "s:^upload_max_filesize.*$:upload_max_filesize = 20M:" /etc/php5/apache2/php.ini
             a2enconf phppgadmin
@@ -300,4 +298,5 @@ outputs:
     description: "Resource ID assigned to the newly created volume attached to instance"
     value: 
       get_resource: cinder_volume
+
 
