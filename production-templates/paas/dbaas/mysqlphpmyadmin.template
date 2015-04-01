@@ -64,7 +64,6 @@ parameters:
       - 
         allowed_pattern: "[a-zA-Z0-9]*"
         description: "db_password must contain only alphanumeric characters"
-    default: admin
     description: "Database admin account password"
     hidden: true
     type: string
@@ -77,8 +76,7 @@ parameters:
           min: 4
       - 
         allowed_pattern: "[a-zA-Z0-9]*"
-        description: "db_password must contain only alphanumeric characters"
-    default: admin
+        description: "root password must contain only alphanumeric characters"
     description: "Root password for MySQL"
     hidden: true
     type: string
@@ -292,5 +290,4 @@ outputs:
     description: "Resource ID assigned to the newly created volume attached to instance"
     value:
       get_resource: cinder_volume
-
 
