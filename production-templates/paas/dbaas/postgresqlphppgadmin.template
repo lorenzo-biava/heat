@@ -65,6 +65,7 @@ parameters:
         allowed_pattern: "[a-zA-Z0-9]*"
         description: "db_password must contain only alphanumeric characters"
     description: "Database  account password"
+    default: defpass
     hidden: true
     type: string
   db_root_password: 
@@ -98,7 +99,14 @@ parameters:
     default: /mnt/workingdir
     description: "The directory to provide to the user"
     type: string
-
+  db_create_user:
+    type: string
+    label: db_create_user
+    description: Flag for db_user creation
+    constraints:
+      - 
+       allowed_values: [create,do_not_create]
+    
 resources:
   my_instance:
     type: OS::Nova::Server
@@ -128,6 +136,8 @@ resources:
               get_param: db_root_password
             db_user: 
               get_param: db_username
+            db_createuser:
+              get_param: db_create_user
             device_name: /dev/vdb
             mountpoint: 
               get_param: mountpoint
@@ -181,10 +191,15 @@ resources:
             service postgresql restart || notify_err "Some problems occurred with PostgreSQL installation"
             
             # Setup postgres password, create a user and db
-            sudo -u postgres psql -c "alter role postgres password 'db_rootpassword';" 
-            sudo -u postgres psql -c "create role db_user password 'db_password' SUPERUSER CREATEDB CREATEROLE INHERIT;" 
-            sudo -u postgres createdb db_name -O db_user;
-            sudo -u postgres psql -c "alter role db_user LOGIN;" 
+            sudo -u postgres psql -c "alter role postgres password 'db_rootpassword';"
+            if [db_createuser = "create"]; then  
+              sudo -u postgres psql -c "create role db_user password 'db_password' SUPERUSER CREATEDB CREATEROLE INHERIT;" 
+              sudo -u postgres createdb db_name -O db_user;
+              sudo -u postgres psql -c "alter role db_user LOGIN;" 
+            else
+              sudo -u postgres createdb db_name;
+            fi
+ 
             
             # Apache2 installation
             apt-get install -y apache2

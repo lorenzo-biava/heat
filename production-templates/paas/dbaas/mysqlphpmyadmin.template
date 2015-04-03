@@ -41,6 +41,13 @@ parameters:
         description: "db_name must contain only alphanumeric characters or _ or -"
     default: tempdatabase
     description: "Database name"
+  db_create_user:
+    type: string
+    label: db_create_user
+    description: Flag for db_user creation
+    constraints:
+      - 
+       allowed_values: [create,do_not_create]
   db_username:
     constraints:
       -
@@ -65,6 +72,7 @@ parameters:
         allowed_pattern: "[a-zA-Z0-9]*"
         description: "db_password must contain only alphanumeric characters"
     description: "Database admin account password"
+    default: defpass
     hidden: true
     type: string
   db_root_password: 
@@ -122,6 +130,8 @@ resources:
           params: 
             db_name: 
               get_param: db_name
+            db_createuser:
+              get_param: db_create_user
             db_password: 
               get_param: db_password
             db_rootpassword: 
@@ -174,9 +184,11 @@ resources:
               # Create a user and the DB
               cat << EOF | mysql -u root --password=db_rootpassword
               CREATE DATABASE db_name;
-              GRANT ALL PRIVILEGES ON db_name.* TO "db_user"@"localhost" IDENTIFIED BY "db_password";
-              GRANT ALL PRIVILEGES ON db_name.* TO "db_user"@"%" IDENTIFIED BY "db_password";
-              FLUSH PRIVILEGES;
+              if [db_createuser = "create"]; then  
+                GRANT ALL PRIVILEGES ON db_name.* TO "db_user"@"localhost" IDENTIFIED BY "db_password";
+                GRANT ALL PRIVILEGES ON db_name.* TO "db_user"@"%" IDENTIFIED BY "db_password";
+                FLUSH PRIVILEGES;
+              fi
               EXIT
               EOF
               
