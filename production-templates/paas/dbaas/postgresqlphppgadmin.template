@@ -192,7 +192,7 @@ resources:
             
             # Setup postgres password, create a user and db
             sudo -u postgres psql -c "alter role postgres password 'db_rootpassword';"
-            if [ $db_createuser == "create" ]; then  
+            if [ "db_createuser" == "create" ]; then  
               sudo -u postgres psql -c "create role db_user password 'db_password' SUPERUSER CREATEDB CREATEROLE INHERIT;" 
               sudo -u postgres createdb db_name -O db_user;
               sudo -u postgres psql -c "alter role db_user LOGIN;" 
