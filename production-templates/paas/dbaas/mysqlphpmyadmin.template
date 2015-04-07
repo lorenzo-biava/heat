@@ -180,18 +180,22 @@ resources:
               mysql_install_db --datadir=mountpoint/data
               service mysql restart || notify_err "Some problems occurred with mysql installation/configuration"
               # Setup MySQL root password 
-              mysqladmin -u root password db_rootpassword 
+              mysqladmin -u root password db_rootpassword
+              if [[ "db_createuser" == "create" ]]; then 
               # Create a user and the DB
-              cat << EOF | mysql -u root --password=db_rootpassword
+              cat <<- EOF | mysql -u root --password=db_rootpassword
               CREATE DATABASE db_name;
-              if [ $db_createuser == "create" ]; then  
-                GRANT ALL PRIVILEGES ON db_name.* TO "db_user"@"localhost" IDENTIFIED BY "db_password";
-                GRANT ALL PRIVILEGES ON db_name.* TO "db_user"@"%" IDENTIFIED BY "db_password";
-                FLUSH PRIVILEGES;
-              fi
+              GRANT ALL PRIVILEGES ON db_name.* TO "db_user"@"localhost" IDENTIFIED BY "db_password";
+              GRANT ALL PRIVILEGES ON db_name.* TO "db_user"@"%" IDENTIFIED BY "db_password";
+              FLUSH PRIVILEGES;
+              EXIT
+              EOF 
+              else
+              cat <<- EOF | mysql -u root --password=db_rootpassword
+              CREATE DATABASE db_name;
               EXIT
               EOF
-              
+              fi
               # Apache2 installation
               apt-get install -y apache2
               # PHP installation
