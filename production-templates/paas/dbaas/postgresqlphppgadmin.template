@@ -166,9 +166,6 @@ resources:
             echo "deb http://apt.postgresql.org/pub/repos/apt/ precise-pgdg main" >> /etc/apt/sources.list
             wget --quiet -O - http://apt.postgresql.org/pub/repos/apt/ACCC4CF8.asc | sudo apt-key add -
             apt-get install -y postgresql-9.3 postgresql-contrib
-            # Configure Postgres Remote Access
-            sed -i "s/#listen_addresses = 'localhost'/listen_addresses = '*'/g" /etc/postgresql/9.3/main/postgresql.conf
-            echo "host    all             all             0.0.0.0/0               md5" | tee -a /etc/postgresql/9.3/main/pg_hba.conf
             service postgresql restart
             service postgresql stop
             
@@ -188,11 +185,14 @@ resources:
             cp -R -p /etc/postgresql/9.3/main mountpoint/data
             ln -s mountpoint/data /etc/postgresql/9.3/main
             sed -i "s:^data_directory.*$:data_directory\t\t= 'mountpoint/data':" /etc/postgresql/9.3/main/postgresql.conf
+            # Configure Postgres Remote Access
+            sed -i "s:^#listen_addresses = 'localhost':listen_addresses = '*':" /etc/postgresql/9.3/main/postgresql.conf
+            echo "host    all             all             0.0.0.0/0               md5" | tee -a /etc/postgresql/9.3/main/pg_hba.conf
             service postgresql restart || notify_err "Some problems occurred with PostgreSQL installation"
             
             # Setup postgres password, create a user and db
             sudo -u postgres psql -c "alter role postgres password 'db_rootpassword';"
-            if [ "db_createuser" == "create" ]; then  
+            if [[ "db_createuser" == "create" ]]; then  
               sudo -u postgres psql -c "create role db_user password 'db_password' SUPERUSER CREATEDB CREATEROLE INHERIT;" 
               sudo -u postgres createdb db_name -O db_user;
               sudo -u postgres psql -c "alter role db_user LOGIN;" 
@@ -248,7 +248,7 @@ resources:
 
             curl -X PUT -H 'Content-Type:application/json' -d '{"Status" : "SUCCESS","Reason" : "mysql and phpmyadmin installed OK","UniqueId" : "ID1","Data" : "Server Configuration OK"}' \
             "$wait_handle$"
-            exit
+            exit 0
             
   wait_condition:
            type: AWS::CloudFormation::WaitCondition
