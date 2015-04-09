@@ -197,6 +197,13 @@ resources:
               EXIT
               EOF
               fi
+              # Allow root remote access 
+              cat << EOF | mysql -u root --password=db_rootpassword
+              CREATE DATABASE db_name;
+              GRANT ALL PRIVILEGES ON *.* TO "root"@"%" IDENTIFIED BY "db_rootpassword";
+              FLUSH PRIVILEGES;
+              EXIT
+              EOF
               # Apache2 installation
               apt-get install -y apache2
               # PHP installation
@@ -242,7 +249,7 @@ resources:
               
               curl -X PUT -H 'Content-Type:application/json' -d '{"Status" : "SUCCESS","Reason" : "mysql and phpmyadmin installed OK","UniqueId" : "ID1","Data" : "Server Configuration OK"}' \
                        "$wait_handle$"     
-              exit                
+              exit 0                
 
   wait_condition:
            type: AWS::CloudFormation::WaitCondition
