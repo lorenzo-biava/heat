@@ -199,7 +199,6 @@ resources:
               fi
               # Allow root remote access 
               cat << EOF | mysql -u root --password=db_rootpassword
-              CREATE DATABASE db_name;
               GRANT ALL PRIVILEGES ON *.* TO "root"@"%" IDENTIFIED BY "db_rootpassword";
               FLUSH PRIVILEGES;
               EXIT
