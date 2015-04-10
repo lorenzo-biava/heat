@@ -158,8 +158,9 @@ resources:
               apt-get update
               export DEBIAN_FRONTEND=noninteractive
               apt-get -q -y install mysql-server
-              # Setting bind address to mysql remote access
+              # Setting bind address and port to mysql remote access
               sed -i "s/127.0.0.1/0.0.0.0/g" /etc/mysql/my.cnf
+              sed -r -i "0,/mysqld/! s/port[[:space:]]+=.*/port = 33306/" /etc/mysql/my.cnf 
               service mysql restart
               service mysql stop
               #Allow user to use volume
@@ -215,6 +216,7 @@ resources:
               echo "phpmyadmin phpmyadmin/mysql/app-pass password db_rootpassword" | debconf-set-selections
               echo 'phpmyadmin phpmyadmin/reconfigure-webserver multiselect apache2' | debconf-set-selections
               apt-get install -q -y phpmyadmin php5-mysql
+              sed -i "/dbc_dbport=/c\dbc_dbport='33306'" /etc/dbconfig-common/phpmyadmin.conf 
               echo "Include /etc/phpmyadmin/apache.conf" >> /etc/apache2/apache2.conf
               php5enmod mcrypt 
               service apache2 restart || notify_err "Some problems occurred with phpmyadmin installation/configuration"
@@ -257,7 +259,7 @@ resources:
            properties:
             Count: 1
             Handle: { get_resource: wait_condition_handle }
-            Timeout: 1800
+            Timeout: 3600
 
   wait_condition_handle:
            type: AWS::CloudFormation::WaitConditionHandle
@@ -310,6 +312,17 @@ outputs:
               - my_instance
               - first_address
         template: "http://host/phpmyadmin"
+  mysqlEndpoint:
+    description: "MySQL server IP and port (host:port)"
+    value:
+      str_replace:
+        params:
+          host:
+            get_attr:
+              - my_instance
+              - first_address
+        template: "host:33306"
+
   volume_id:
     description: "Resource ID assigned to the newly created volume attached to instance"
     value:
