@@ -22,29 +22,20 @@ parameters:
     type: string
     description: The Host Aggregate to launch the instance in form of '{host:myhost}'.
     default: nova
+  net_id:
+    type: string
+    description: ID of public (or private) sub network into which servers get deployed
   security_groups:
     type: comma_delimited_list
     description: List of security group names or IDs
     default: [biaas]
-  port1:
-    type: string
-    description: port for default Postgresql repository
-    default: 5432
-  port2:
-    type: string
-    description: port for Tomcat e Pentaho
-    default: 8080
   ip_repo:
     type: string
     description: public IP for wget download files, .jpeg, ecc. for custom configuration
     default: cloudrepo.cloud.ba.infn.it
-  net_id:
-    type: string
-    description: ID of public (or private) sub network into which servers get deployed
   admin_password:
     type: string
     description: Password for Administration
-    default: admin
     hidden: true
   volume_size:
     type: number
@@ -68,7 +59,6 @@ parameters:
       - 
         allowed_pattern: "[a-zA-Z0-9]*"
         description: "db_password must contain only alphanumeric characters"
-    default: admin
     description: "Root password for POSTGRESQL"
     hidden: true
     type: string
@@ -209,24 +199,29 @@ resources:
             #import already ad-hoc created file /etc/init.d/pentaho
             wget http://ip_repo/pentaho -O /etc/init.d/pentaho
             #import already ad-hoc modified version of start-pentaho.sh
-            chmod 777 /home/pentaho/server/biserver-ce/start-pentaho.sh
             mv /home/pentaho/server/biserver-ce/start-pentaho.sh /home/pentaho/server/biserver-ce/start-pentaho.sh.OLD
             wget http://ip_repo/start-pentaho.sh -O /home/pentaho/server/biserver-ce/start-pentaho.sh
+            chmod 777 /home/pentaho/server/biserver-ce/*.sh
             chmod +x /etc/init.d/pentaho
             update-rc.d pentaho defaults
+            #For Reboot to restart Pentaho
+            sed -i "s/\"exit 0\"/exit/g" /etc/rc.local 
+            sed -i "s/exit 0/sh \/home\/pentaho\/server\/biserver-ce\/start-pentaho.sh\nexit 0/g" /etc/rc.local
             # Driver JDBC (default postgresql 9.1, mysql 5.1, hsqldb e h2)
             wget -O /usr/share/java/postgresql-9.2-1003.jdbc4.jar jdbc.postgresql.org/download/postgresql-9.2-1003.jdbc4.jar
             ln -s /usr/share/java/postgresql-9.2-1003.jdbc4.jar /usr/share/java/postgresql-9.2-jdbc4.jar
             ln -s /usr/share/java/postgresql-9.2-jdbc4.jar /home/pentaho/server/biserver-ce/tomcat/lib/postgresql-9.2-jdbc4.jar
-            sudo chmod 770 /home/pentaho/server/biserver-ce/*.sh
-            sudo chmod 770 /home/pentaho/server/biserver-ce/tomcat/lib/*
+            ## install init script links to configure service autostart at reboot 
             #Start Tomcat and Pentaho BA server
+            chmod 777 /home/pentaho/server/biserver-ce/*.sh
+            chmod 770 /home/pentaho/server/biserver-ce/tomcat/lib/*
+            chmod 777 /home/pentaho/server/biserver-ce/tomcat/bin/*.sh
             /home/pentaho/server/biserver-ce/start-pentaho.sh
             #Checking that pentaho/tomcat service is up before to run curl command
             MY_CHECK=4
             while (( $MY_CHECK )); do
             wget http://127.0.0.1:8080/pentaho
-            if [$? -eq 0]; then 
+            if [ $? -eq 0 ]; then 
               MY_CHECK=$?
             else
               let MY_CHECK-=1
@@ -257,7 +252,7 @@ resources:
     properties:
      Count: 1
      Handle: { get_resource: wait_condition_handle }
-     Timeout: 1800
+     Timeout: 3500
 
   wait_condition_handle:
            type: AWS::CloudFormation::WaitConditionHandle
@@ -291,14 +286,6 @@ outputs:
   vmName:
     description: vm name 
     value: { get_param: vm_name }
-  serviceType: 
-    description: List of services and ports to be monitored 
-    value:
-      str_replace:
-        template: postgresql:port1, pentaho:port2
-        params:
-          port1: { get_param: port1 } 
-          port2: { get_param: port2 } 
   URL: 
     description: Pentaho BI Community Edition can be accessed at 
     value:
