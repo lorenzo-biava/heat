@@ -18,21 +18,13 @@ parameters:
     type: string
     description: The Availability Zone to launch the instance.
     default: nova
-  scheduler_hints:
-    type: string
-    description: The Host Aggregate to launch the instance in form of '{host:myhost}'.
-    default: nova
   net_id:
     type: string
     description: ID of public (or private) sub network into which servers get deployed
   security_groups:
     type: comma_delimited_list
     description: List of security group names or IDs
-    default: [biaas]
-  ip_repo:
-    type: string
-    description: public IP for wget download files, .jpeg, ecc. for custom configuration
-    default: cloudrepo.cloud.ba.infn.it
+    default: [biaas,zabbix]
   admin_password:
     type: string
     description: Password for Administration
@@ -49,21 +41,10 @@ parameters:
     type: string
     description: Type of volume to be used (encrypted or not)
     default: data
-  db_root_password: 
-    constraints: 
-      - 
-        description: "root password must be between 4 and 41 characters"
-        length: 
-          max: 41
-          min: 4
-      - 
-        allowed_pattern: "[a-zA-Z0-9]*"
-        description: "db_password must contain only alphanumeric characters"
-    description: "Root password for POSTGRESQL"
-    hidden: true
-    type: string
 
 resources:
+  db_root_password: 
+    type: OS::Heat::RandomString
   user_data_instance:
     type: OS::Nova::Server
     properties:
@@ -235,13 +216,28 @@ resources:
             [[ $? -eq 0 ]] || notify_err "Some problems occurred with ip http://127.0.0.1:8080/pentaho"
             # change default admin password
             curl -u admin:password -X PUT -H"Content-Type: application/json" -d '{"userName": "admin", "password" : "admin_password"}' http://127.0.0.1:8080/pentaho/api/userroledao/updatePassword
+
+
+            # Zabbix agent installation
+            echo "Zabbix Agent installation and configuration"
+            wget http://repo.zabbix.com/zabbix/2.2/ubuntu/pool/main/z/zabbix-release/zabbix-release_2.2-1+trusty_all.deb
+            dpkg -i zabbix-release_2.2-1+trusty_all.deb
+            apt-get update
+            apt-get install -y zabbix-agent
+            zabbix_metrics="zabbix-metrics.infn.ponsmartcities-prisma.it"
+            zabbix_watcher="zabbix-watcher.infn.ponsmartcities-prisma.it"
+            sed -i -e "s/^Server=.*/Server=${zabbix_metrics},${zabbix_watcher}/" /etc/zabbix/zabbix_agentd.conf
+            sed -i -e "s/^ServerActive=.*/ServerActive=${zabbix_metrics},${zabbix_watcher}/" /etc/zabbix/zabbix_agentd.conf
+            sed -i -e "s/^Hostname=.*/Hostname=${HOSTNAME//./_}/" /etc/zabbix/zabbix_agentd.conf
+            service zabbix-agent restart || notify_err "Some problems occurred with Zabbix Agent installation/configuration"
+
             curl -X PUT -H 'Content-Type:application/json' -d '{"Status" : "SUCCESS","Reason" : "Pentaho with Postgresql installed OK","UniqueId" : "ID1","Data" : "Server Configuration OK"}' \
             "$wait_handle$"     
-            exit            
+            exit 0
           params:
             admin_password: { get_param: admin_password }
-            db_rootpassword:{ get_param: db_root_password}
-            ip_repo: { get_param: ip_repo }
+            db_rootpassword: {get_attr: [db_root_password, value]}
+            ip_repo: cloudrepo.cloud.ba.infn.it
             mountpoint: { get_param: mountpoint }
             device_name: /dev/vdb
             $wait_handle$: { get_resource: wait_condition_handle}
@@ -277,22 +273,16 @@ resources:
       security_groups: { get_param: security_groups }
 
 outputs:
-  vmIp:
+  instance_ip:
     description: The IP address of the deployed instance
     value: { get_attr: [user_data_instance, first_address] }
-  vmUuid:
+  instance_id:
     description: Resource ID assigned to the newly created instance
     value: { get_resource: user_data_instance }
-  vmName:
-    description: vm name 
-    value: { get_param: vm_name }
-  URL: 
+  manageURL: 
     description: Pentaho BI Community Edition can be accessed at 
     value:
       str_replace:
         template: http://host:8080/pentaho
         params:
           host: { get_attr: [user_data_instance, first_address] } 
-  volumeUuid:
-    description: Resource ID assigned to the newly created volume attached to instance
-    value: { get_resource: cinder_volume }
