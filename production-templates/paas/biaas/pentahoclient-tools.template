@@ -5,7 +5,10 @@ description: Template to deploy a Pentaho Client with Data Integration and Repor
 parameters:
   key_name:
     type: string
-    description: Name of a KeyPair 
+    description: Name of a KeyPair
+  user_public_key:
+    type: string
+    description: public user key  
   vm_name:
     type: string
     label: VM name
@@ -74,16 +77,14 @@ resources:
             mkdir /home/pentaho/Desktop
             chown pentaho:pentaho /home/pentaho/Desktop
             chmod 755 /home/pentaho/Desktop
-            echo 'pentaho ALL=(ALL) ALL' | tee -a /etc/sudoers
             sed -i "s:^127.0.0.1:127.0.0.1 $HOSTNAME:" /etc/hosts
             mkdir /home/pentaho/.ssh
             chmod 700 /home/pentaho/.ssh
-            cat /home/ubuntu/.ssh/authorized_keys >> /home/pentaho/.ssh/authorized_keys
+            echo user_public_key  >> /home/pentaho/.ssh/authorized_keys
             chmod 600 /home/pentaho/.ssh/authorized_keys
             chown pentaho:pentaho /home/pentaho/.ssh
             chown pentaho:pentaho /home/pentaho/.ssh/authorized_keys
             #Install x2go
-            #apt-get install python-software-properties SECONDO ME SI
             sudo add-apt-repository ppa:x2go/stable
             sudo apt-get update
             sudo apt-get install -y x2goserver x2goserver-xsession
@@ -103,6 +104,11 @@ resources:
             # Install Postgresql driver
             wget -O /home/pentaho/client/report-designer/lib/jdbc/postgresql-9.2-1003.jdbc4.jar jdbc.postgresql.org/download/postgresql-9.2-1003.jdbc4.jar
             [[ $? -eq 0 ]] || notify_err "Some problems occurred with Install Postgresql driver "
+            #Install Mysql Driver
+            wget http://www.java2s.com/Code/JarDownload/mysql/mysql-connector-java-5.1.17-bin.jar.zip
+            [[ $? -eq 0 ]] || notify_err "Some problems occurred with Install Mysql driver "
+            unzip -n mysql-connector-java-5.1.17-bin.jar.zip -d /home/pentaho/client/report-designer/lib/jdbc/ 
+            unzip -n mysql-connector-java-5.1.17-bin.jar.zip -d /home/pentaho/client/data-integration/lib/  
             # Configure existing Pentaho server as Report Designer Repository (IP:8080/pentaho is the default configuration)
             sed -i "s|localhost|ip_server_bi|g" /home/pentaho/client/report-designer/resources/classic-engine.properties
             sed -i "s|Designer|design_user|g" /home/pentaho/client/report-designer/resources/classic-engine.properties
@@ -180,6 +186,7 @@ resources:
             design_password: { get_param: design_password }
             ip_server_bi: { get_param: ip_server_bi }
             $wait_handle$: { get_resource: wait_condition_handle}
+            user_public_key: { get_param: user_public_key }
 
   wait_condition:
     type: AWS::CloudFormation::WaitCondition
@@ -206,3 +213,4 @@ outputs:
     description: Resource ID assigned to the newly created instance
     value: { get_resource: user_data_instance }
         
+
