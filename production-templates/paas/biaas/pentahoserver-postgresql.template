@@ -177,6 +177,11 @@ resources:
             #Customise Login
             cp /home/pentaho/server/biserver-ce/pentaho-solutions/system/common-ui/resources/themes/crystal/images/login-crystal-bg.jpeg /home/pentaho/server/biserver-ce/pentaho-solutions/system/common-ui/resources/themes/crystal/images/login-crystal-bgOLD.jpeg
             wget http://ip_repo/login-crystal-bg.jpg -O /home/pentaho/server/biserver-ce/pentaho-solutions/system/common-ui/resources/themes/crystal/images/login-crystal-bg.jpeg
+
+            #Install Saiku Plugin
+            wget http://www.meteorite.bi/downloads/saiku-plugin-p5-2.6.zip
+            unzip -n saiku-plugin-p5-2.6.zip -d /home/pentaho/server/biserver-ce/pentaho-solutions/system/
+
             #import already ad-hoc created file /etc/init.d/pentaho
             wget http://ip_repo/pentaho -O /etc/init.d/pentaho
             #import already ad-hoc modified version of start-pentaho.sh
@@ -279,10 +284,11 @@ outputs:
   instance_id:
     description: Resource ID assigned to the newly created instance
     value: { get_resource: user_data_instance }
-  manageURL: 
+  manage_url: 
     description: Pentaho BI Community Edition can be accessed at 
     value:
       str_replace:
         template: http://host:8080/pentaho
         params:
           host: { get_attr: [user_data_instance, first_address] } 
+
