@@ -18,10 +18,6 @@ parameters:
     type: string
     description: The Availability Zone to launch the instance.
     default: nova
-  scheduler_hints:
-    type: string
-    description: The Host Aggregate to launch the instance in form of '{host:myhost}'.
-    default: nova
   security_groups:
     type: comma_delimited_list
     description: List of security group names or IDs
@@ -312,7 +308,7 @@ outputs:
               - my_instance
               - first_address
         template: "http://host/phpmyadmin"
-  mysqlEndpoint:
+  endpoint:
     description: "MySQL server IP and port (host:port)"
     value:
       str_replace:
@@ -322,9 +318,4 @@ outputs:
               - my_instance
               - first_address
         template: "host:33306"
-
-  volume_id:
-    description: "Resource ID assigned to the newly created volume attached to instance"
-    value:
-      get_resource: cinder_volume
 
