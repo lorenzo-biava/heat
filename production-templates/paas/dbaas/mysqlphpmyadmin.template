@@ -298,7 +298,7 @@ outputs:
       get_attr:
         - my_instance
         - first_address
-  manageURL:
+  manage_url:
     description: "phpMyAdmin can be accessed at"
     value:
       str_replace:
