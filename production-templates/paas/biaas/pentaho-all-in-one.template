@@ -46,7 +46,7 @@ parameters:
   volume_size:
     type: number
     description: Size of the volume to be created.
-    default: 1
+    default: 10
   mountpoint:
     type: string
     description: The directory to provide to the user
@@ -57,8 +57,14 @@ parameters:
     default: data
 
 resources:
-  db_root_password: 
+  postgres_root_passwd: 
     type: OS::Heat::RandomString
+    properties:
+      length: 10
+  pentaho_user_passwd:
+    type: OS::Heat::RandomString
+    properties:
+      length: 10
   user_data_instance:
     type: OS::Nova::Server
     properties:
@@ -85,7 +91,7 @@ resources:
             sudo su -
             # Create Linux User Account
             useradd -s /bin/bash -m pentaho
-            echo "pentaho:admin_password" | chpasswd
+            echo "pentaho:root_password" | chpasswd
             mkdir -p /home/pentaho/server/biserver-ce
             mkdir -p .pentaho
             mkdir -p /home/pentaho/client
@@ -343,8 +349,9 @@ resources:
             "$wait_handle$" 
             exit 0
           params:
-            admin_password: { get_param: admin_password }
-            db_rootpassword: {get_attr: [db_root_password, value]}
+            db_rootpassword: {get_attr: [postgres_root_passwd, value]}
+            root_password: {get_attr: [pentaho_user_passwd, value]}
+            admin_password: { get_param: admin_password } 
             ip_repo: cloudrepo.cloud.ba.infn.it
             design_user: { get_param: design_user }
             design_password: { get_param: design_password }
@@ -397,6 +404,13 @@ outputs:
         template: http://host:8080/pentaho
         params:
           host: { get_attr: [user_data_instance, first_address] } 
+  postgres_root_passwd:
+    description: Password for PostgreSQL root user 
+    value: {  get_resource: postgres_root_passwd }
+  pentaho_user_passwd:
+    description: Password for pentaho Linux user  
+    value: { get_resource: pentaho_user_passwd} 
 
         
+
 

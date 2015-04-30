@@ -44,8 +44,10 @@ parameters:
     description: ID of public (or private) sub network into which servers get deployed
 
 resources:
-  pentaho_password:
+  pentaho_user_passwd:
     type: OS::Heat::RandomString
+    properties:
+      length: 10
   user_data_instance:
     type: OS::Nova::Server
     properties:
@@ -181,7 +183,7 @@ resources:
             "$wait_handle$" 
             exit 0
           params:
-            root_password: {get_attr: [pentaho_password, value]}
+            root_password: {get_attr: [pentaho_user_passwd, value]}
             design_user: { get_param: design_user }
             design_password: { get_param: design_password }
             ip_server_bi: { get_param: ip_server_bi }
@@ -212,5 +214,9 @@ outputs:
   instance_id:
     description: Resource ID assigned to the newly created instance
     value: { get_resource: user_data_instance }
+  pentaho_user_passwd:
+    description: Password for pentaho Linux user       
+    value: { get_resource: pentaho_user_passwd}
+
         
 
