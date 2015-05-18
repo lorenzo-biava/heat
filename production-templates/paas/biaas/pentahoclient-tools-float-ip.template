@@ -1,0 +1,229 @@
+heat_template_version: 2013-05-23
+
+description: Template to deploy a Pentaho Client with Data Integration and Report Design Tools
+
+parameters:
+  key_name:
+    type: string
+    description: Name of a KeyPair
+  user_public_key:
+    type: string
+    description: public user key  
+  vm_name:
+    type: string
+    label: VM name
+  instance_type:
+    type: string
+    label: Instance Type
+    description: Type of instance (flavor) to be used
+    default: large.bronze
+  availability_zone:
+    type: string
+    description: The Availability Zone to launch the instance.
+    default: nova
+  ext_net_id:
+    type: string
+    description: ID of external sub network into which servers get deployed
+  private_net_id:
+    type: string
+    description: ID of private sub network into which servers get deployed
+  security_groups:
+    type: comma_delimited_list
+    description: List of security group names or IDs
+    default: [biaas,zabbix]
+  ip_server_bi:
+    type: string
+    description: IP of existing Pentaho BI server
+  design_user:
+    type: string
+    description: Designer account username
+    default: admin
+  design_password:
+    type: string
+    description: Designer account password
+    hidden: true
+  
+resources:
+  pentaho_user_passwd:
+    type: OS::Heat::RandomString
+    properties:
+      length: 10
+  user_data_instance:
+    type: OS::Nova::Server
+    properties:
+      name: { get_param: vm_name }
+      key_name: { get_param: key_name }
+      image: PRISMA-Ubuntu-14.04-x86_64-Desktop
+      flavor: { get_param: instance_type }
+      availability_zone: { get_param: availability_zone }
+      networks:
+        - port: { get_resource: server1_port }
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+            # Helper function to signal error condition
+            function notify_err
+            {
+             message=$1
+             curl -X PUT -H 'Content-Type:application/json' -d "{\"Status\" : \"FAILURE\",\"Reason\" : \"$message\",\"UniqueId\" : \"ID1\",\"Data\" : \"Server Configuration NOT OK\"}" \
+             "$wait_handle$"
+             exit 1
+            }
+            sudo su -
+            # Create Linux User Account
+            useradd -s /bin/bash -m pentaho
+            echo "pentaho:root_password" | chpasswd
+            mkdir -p /home/pentaho/client
+            mkdir /home/pentaho/Desktop
+            chown pentaho:pentaho /home/pentaho/Desktop
+            chmod 755 /home/pentaho/Desktop
+            sed -i "s:^127.0.0.1:127.0.0.1 $HOSTNAME:" /etc/hosts
+            mkdir /home/pentaho/.ssh
+            chmod 700 /home/pentaho/.ssh
+            echo user_public_key  >> /home/pentaho/.ssh/authorized_keys
+            chmod 600 /home/pentaho/.ssh/authorized_keys
+            chown pentaho:pentaho /home/pentaho/.ssh
+            chown pentaho:pentaho /home/pentaho/.ssh/authorized_keys
+            #Install x2go
+            sudo add-apt-repository ppa:x2go/stable
+            sudo apt-get update
+            sudo apt-get install -y x2goserver x2goserver-xsession
+            #Install zip e unzip
+            apt-get install -y zip unzip 
+            # Install jdk
+            apt-get install -y openjdk-7-jdk
+            su root -c "echo 'export PENTAHO_JAVA_HOME=\"/usr/lib/jvm//java-7-openjdk-amd64\"' >> /etc/environment" 
+            # Install Pentaho Report Designer
+            wget http://downloads.sourceforge.net/project/pentaho/Report%20Designer/5.1/prd-ce-5.1.0.0-752.zip
+            [[ $? -eq 0 ]] || notify_err "Some problems occurred with Install Pentaho Report Designer"
+            unzip -n prd-ce-5.1.0.0-752.zip -d /home/pentaho/client
+            # Install Pentaho Data Integration (Kettle)
+            wget http://downloads.sourceforge.net/project/pentaho/Data%20Integration/5.1/pdi-ce-5.1.0.0-752.zip
+            [[ $? -eq 0 ]] || notify_err "Some problems occurred with Install Pentaho Data Integration "
+            unzip -n pdi-ce-5.1.0.0-752.zip -d /home/pentaho/client
+            # Install Postgresql driver
+            wget -O /home/pentaho/client/report-designer/lib/jdbc/postgresql-9.2-1003.jdbc4.jar jdbc.postgresql.org/download/postgresql-9.2-1003.jdbc4.jar
+            [[ $? -eq 0 ]] || notify_err "Some problems occurred with Install Postgresql driver "
+            #Install Mysql Driver
+            wget http://www.java2s.com/Code/JarDownload/mysql/mysql-connector-java-5.1.17-bin.jar.zip
+            [[ $? -eq 0 ]] || notify_err "Some problems occurred with Install Mysql driver "
+            unzip -n mysql-connector-java-5.1.17-bin.jar.zip -d /home/pentaho/client/report-designer/lib/jdbc/ 
+            unzip -n mysql-connector-java-5.1.17-bin.jar.zip -d /home/pentaho/client/data-integration/lib/  
+            # Configure existing Pentaho server as Report Designer Repository (IP:8080/pentaho is the default configuration)
+            sed -i "s|localhost|ip_server_bi|g" /home/pentaho/client/report-designer/resources/classic-engine.properties
+            sed -i "s|Designer|design_user|g" /home/pentaho/client/report-designer/resources/classic-engine.properties
+            sed -i "s|roles=None|roles=manager-gui,admin-gui|g" /home/pentaho/client/report-designer/resources/classic-engine.properties
+            sed -i "s|password|design_password|g" /home/pentaho/client/report-designer/resources/report-designer.properties
+            sed -i "s|localhost|ip_server_bi|g" /home/pentaho/client/report-designer/resources/report-designer.properties
+            # Set configuration for better performance
+            sed -i "s|-XX:MaxPermSize=512m|-XX:MaxPermSize=512m -Xmx1024M|g" /home/pentaho/client/report-designer/report-designer.sh
+            # Create desktop icon for App launching
+            cat << EOF > /usr/share/applications/pentaho-prd.desktop
+            [Desktop Entry]
+            Version=1.0
+            Name=Pentaho-Reporting
+            Comment=Pentaho Reporting App
+            Exec=/usr/bin/launch_pentaho_report.sh
+            Icon=/home/pentaho/client/data-integration/docs/English/welcome/img/header-image-1.png
+            Terminal=false
+            Type=Application
+            Categories=Utility;Application;
+            EOF
+            ########
+            cat << EOF > /usr/share/applications/pentaho-pdi.desktop
+            [Desktop Entry]
+            Version=1.0
+            Name=Pentaho-Data-Integration
+            Comment=Pentaho ETL App
+            Exec=/usr/bin/launch_pentaho_pdi.sh
+            Icon=/home/pentaho/client/data-integration/docs/English/welcome/img/header-image-2.png
+            Terminal=false
+            Type=Application
+            Categories=Utility;Application;
+            EOF
+            #######
+            cat << EOF > /usr/bin/launch_pentaho_report.sh
+            #!/bin/bash
+            unset PENTAHO_JAVA_HOME PENTAHO_JAVA
+            cd /home/pentaho/client/report-designer
+            ./report-designer.sh
+            EOF
+            #######
+            cat << EOF > /usr/bin/launch_pentaho_pdi.sh
+            #!/bin/bash
+            unset PENTAHO_JAVA_HOME PENTAHO_JAVA
+            cd /home/pentaho/client/data-integration
+            ./spoon.sh
+            EOF
+            cp -f /usr/share/applications/pentaho-pdi.desktop /home/pentaho/Desktop/pentaho-pdi.desktop
+            chown pentaho:pentaho /home/pentaho/Desktop/pentaho-pdi.desktop
+            chmod +x /home/pentaho/Desktop/pentaho-pdi.desktop
+            chmod 755 /usr/bin/launch_pentaho_pdi.sh
+            cp -f /usr/share/applications/pentaho-prd.desktop /home/pentaho/Desktop/pentaho-prd.desktop
+            chown pentaho:pentaho /home/pentaho/Desktop/pentaho-prd.desktop
+            chmod +x /home/pentaho/Desktop/pentaho-prd.desktop
+            chmod 755 /usr/bin/launch_pentaho_report.sh
+
+            # Zabbix agent installation
+            echo "Zabbix Agent installation and configuration"
+            wget http://repo.zabbix.com/zabbix/2.2/ubuntu/pool/main/z/zabbix-release/zabbix-release_2.2-1+trusty_all.deb
+            dpkg -i zabbix-release_2.2-1+trusty_all.deb
+            apt-get update
+            apt-get install -y zabbix-agent
+            zabbix_metrics="zabbix-metrics.infn.ponsmartcities-prisma.it"
+            zabbix_watcher="zabbix-watcher.infn.ponsmartcities-prisma.it"
+            sed -i -e "s/^Server=.*/Server=${zabbix_metrics},${zabbix_watcher}/" /etc/zabbix/zabbix_agentd.conf
+            sed -i -e "s/^ServerActive=.*/ServerActive=${zabbix_metrics},${zabbix_watcher}/" /etc/zabbix/zabbix_agentd.conf
+            sed -i -e "s/^Hostname=.*/Hostname=${HOSTNAME//./_}/" /etc/zabbix/zabbix_agentd.conf
+            service zabbix-agent restart || notify_err "Some problems occurred with Zabbix Agent installation/configuration"
+
+            curl -X PUT -H 'Content-Type:application/json' -d '{"Status" : "SUCCESS","Reason" : "BI Client Tools installed OK","UniqueId" : "ID1","Data" : "Server Configuration OK"}' \
+            "$wait_handle$" 
+            exit 0
+          params:
+            root_password: {get_attr: [pentaho_user_passwd, value]}
+            design_user: { get_param: design_user }
+            design_password: { get_param: design_password }
+            ip_server_bi: { get_param: ip_server_bi }
+            $wait_handle$: { get_resource: wait_condition_handle}
+            user_public_key: { get_param: user_public_key }
+
+  wait_condition:
+    type: AWS::CloudFormation::WaitCondition
+    depends_on: user_data_instance
+    properties:
+     Count: 1
+     Handle: { get_resource: wait_condition_handle }
+     Timeout: 5000
+
+  wait_condition_handle:
+           type: AWS::CloudFormation::WaitConditionHandle
+
+  server1_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_param: private_net_id }
+      security_groups: { get_param: security_groups }
+
+  user_data_instance_floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network_id: { get_param: ext_net_id }
+      port_id: { get_resource: server1_port }
+
+outputs:
+  instance_public_ip:
+    description: Floating IP address of deployed instance in public network
+    value: { get_attr: [ user_data_instance_floating_ip, floating_ip_address ] }
+  instance_id:
+    description: Resource ID assigned to the newly created instance
+    value: { get_resource: user_data_instance }
+  pentaho_user_passwd:
+    description: Password for pentaho Linux user       
+    value: { get_resource: pentaho_user_passwd}
+
+        
+
+
