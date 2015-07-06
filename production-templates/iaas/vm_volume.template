@@ -32,7 +32,7 @@ parameters:
   device_name:
     type: string
     description: The directory to provide to the user
-    default: /dev/vdc
+    default: /dev/vdb
   mountpoint:
     type: string
     description: The directory to provide to the user
@@ -83,7 +83,7 @@ resources:
     properties:
       volume_id: { get_resource: cinder_volume }
       instance_uuid: { get_resource: my_instance }
-      mountpoint: /dev/vdc
+      mountpoint: /dev/vdb
   server1_port:
     type: OS::Neutron::Port
     properties:
