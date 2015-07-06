@@ -40,7 +40,7 @@ parameters:
   volume_type:
     type: string
     description: Type of volume to be used (encrypted or not)
-    default: data
+    default: ""
   scheduler_hints:
     type: string
     description: The Host Aggregate to launch the instance in form of '{host:myhost}'.
@@ -97,6 +97,3 @@ outputs:
   instance_id:
     description: Resource ID assigned to the newly created instance
     value: { get_resource: my_instance }
-  vmName:
-    description: vm name 
-    value: { get_param: vm_name }

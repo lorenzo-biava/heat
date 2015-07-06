@@ -59,6 +59,3 @@ outputs:
   instance_id:
     description: Resource ID assigned to the newly created instance
     value: { get_resource: my_instance }
-  vmName:
-    description: vm name 
-    value: { get_param: vm_name }
