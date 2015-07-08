@@ -42,6 +42,9 @@ parameters:
   net_id:
     type: string
     description: ID of public (or private) sub network into which servers get deployed
+  ip_repo:
+    type: string
+    description: IP address or DNS name of the HTTP repository containing Pentaho software and customized configuration files
 
 resources:
   pentaho_user_passwd:
@@ -96,18 +99,18 @@ resources:
             apt-get install -y openjdk-7-jdk
             su root -c "echo 'export PENTAHO_JAVA_HOME=\"/usr/lib/jvm//java-7-openjdk-amd64\"' >> /etc/environment" 
             # Install Pentaho Report Designer
-            wget http://downloads.sourceforge.net/project/pentaho/Report%20Designer/5.1/prd-ce-5.1.0.0-752.zip
+            wget http://ip_repo/pentaho-5.1/packages/prd-ce-5.1.0.0-752.zip
             [[ $? -eq 0 ]] || notify_err "Some problems occurred with Install Pentaho Report Designer"
             unzip -n prd-ce-5.1.0.0-752.zip -d /home/pentaho/client
             # Install Pentaho Data Integration (Kettle)
-            wget http://downloads.sourceforge.net/project/pentaho/Data%20Integration/5.1/pdi-ce-5.1.0.0-752.zip
+            wget http://ip_repo/pentaho-5.1/packages/pdi-ce-5.1.0.0-752.zip
             [[ $? -eq 0 ]] || notify_err "Some problems occurred with Install Pentaho Data Integration "
             unzip -n pdi-ce-5.1.0.0-752.zip -d /home/pentaho/client
             # Install Postgresql driver
-            wget -O /home/pentaho/client/report-designer/lib/jdbc/postgresql-9.2-1003.jdbc4.jar jdbc.postgresql.org/download/postgresql-9.2-1003.jdbc4.jar
+            wget -O /home/pentaho/client/report-designer/lib/jdbc/postgresql-9.2-1003.jdbc4.jar http://ip_repo/pentaho-5.1/packages/postgresql-9.2-1003.jdbc4.jar
             [[ $? -eq 0 ]] || notify_err "Some problems occurred with Install Postgresql driver "
             #Install Mysql Driver
-            wget http://www.java2s.com/Code/JarDownload/mysql/mysql-connector-java-5.1.17-bin.jar.zip
+            wget http://ip_repo/pentaho-5.1/packages/mysql-connector-java-5.1.17-bin.jar.zip
             [[ $? -eq 0 ]] || notify_err "Some problems occurred with Install Mysql driver "
             unzip -n mysql-connector-java-5.1.17-bin.jar.zip -d /home/pentaho/client/report-designer/lib/jdbc/ 
             unzip -n mysql-connector-java-5.1.17-bin.jar.zip -d /home/pentaho/client/data-integration/lib/  
@@ -187,6 +190,7 @@ resources:
             design_user: { get_param: design_user }
             design_password: { get_param: design_password }
             ip_server_bi: { get_param: ip_server_bi }
+            ip_repo: { get_param: ip_repo }
             $wait_handle$: { get_resource: wait_condition_handle}
             user_public_key: { get_param: user_public_key }
 

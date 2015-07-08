@@ -44,6 +44,10 @@ parameters:
     type: string
     description: Type of volume to be used (encrypted or not)
     default: ""
+  ip_repo:
+    type: string
+    description: IP address or DNS name of the HTTP repository containing Pentaho software and customized configuration files
+
 
 resources:
   postgres_root_passwd: 
@@ -92,14 +96,14 @@ resources:
             echo 'JAVA_HOME="/usr/lib/jvm/java-1.7.0-openjdk-amd64"' >> /etc/environment
             #dowload and unzip pentaho server
             apt-get install -y zip unzip
-            wget http://sourceforge.net/projects/pentaho/files/Business%20Intelligence%20Server/5.1/biserver-ce-5.1.0.0-752.zip
+            wget http://ip_repo/pentaho-5.1/packages/biserver-ce-5.1.0.0-752.zip
             unzip -n biserver-ce-5.1.0.0-752.zip -d /home/pentaho/server
             echo 'CATALINA_HOME="/home/pentaho/server/biserver-ce/tomcat"' >> /etc/environment
             # Edit tomcat-users.xml configuration file adding pentaho users
             sed -i "s|<tomcat-users>|<tomcat-users>\n<role rolename=\"manager-gui\"/>\n<role rolename=\"admin-gui\"/>\n<role rolename=\"PENTAHO_ADMIN\"/>\n<user username=\"admin\" password=\"admin_password\" roles=\"manager-gui,admin-gui\"/>|g" /home/pentaho/server/biserver-ce/tomcat/conf/tomcat-users.xml
             #Install PostgreSQL  
             echo "deb http://apt.postgresql.org/pub/repos/apt/ precise-pgdg main" >> /etc/apt/sources.list
-            wget --quiet -O - http://apt.postgresql.org/pub/repos/apt/ACCC4CF8.asc | sudo apt-key add -
+            wget --quiet -O - http://ip_repo/pentaho-5.1/packages/ACCC4CF8.asc | sudo apt-key add -
             apt-get install -y postgresql-9.3 postgresql-contrib
             # Configure Postgres Remote Access
             sed -i "s/#listen_addresses = 'localhost'/listen_addresses = '*'/g" /etc/postgresql/9.3/main/postgresql.conf
@@ -152,12 +156,12 @@ resources:
             
             #import already ad-hoc modified version of web.xml file fo Filter/Listner configuration
             mv /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/WEB-INF/web.xml /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/WEB-INF/web.xml.OLD
-            wget http://ip_repo/web.xml -O /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/WEB-INF/web.xml
+            wget http://ip_repo/pentaho-5.1/conf/web.xml -O /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/WEB-INF/web.xml
             [[ $? -eq 0 ]] || notify_err "Some problems occurred with ip repository for pentaho"
             
             #import already ad-hoc modified version of repository.xml file to PostgreSQL configuration
             mv /home/pentaho/server/biserver-ce/pentaho-solutions/system/jackrabbit/repository.xml /home/pentaho/server/biserver-ce/pentaho-solutions/system/jackrabbit/repository.xml.OLD
-            wget http://ip_repo/repository.xml -O /home/pentaho/server/biserver-ce/pentaho-solutions/system/jackrabbit/repository.xml
+            wget http://ip_repo/pentaho-5.1/conf/repository.xml -O /home/pentaho/server/biserver-ce/pentaho-solutions/system/jackrabbit/repository.xml
             
             #Configuring the repository.xml with postgresql user password
             sed -i "s/value=\"password/value=\"admin_password/g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/jackrabbit/repository.xml
@@ -185,17 +189,17 @@ resources:
             sed -i "s|<show-deprecation-warning>.$*|<show-deprecation-warning>false</show-deprecation-warning>|g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/pentaho-jpivot-plugin/settings.xml
             #Customise Login
             cp /home/pentaho/server/biserver-ce/pentaho-solutions/system/common-ui/resources/themes/crystal/images/login-crystal-bg.jpeg /home/pentaho/server/biserver-ce/pentaho-solutions/system/common-ui/resources/themes/crystal/images/login-crystal-bgOLD.jpeg
-            wget http://ip_repo/login-crystal-bg.jpg -O /home/pentaho/server/biserver-ce/pentaho-solutions/system/common-ui/resources/themes/crystal/images/login-crystal-bg.jpeg
+            wget http://ip_repo/pentaho-5.1/conf/login-crystal-bg.jpg -O /home/pentaho/server/biserver-ce/pentaho-solutions/system/common-ui/resources/themes/crystal/images/login-crystal-bg.jpeg
 
             #Install Saiku Plugin
-            wget http://www.meteorite.bi/downloads/saiku-plugin-p5-2.6.zip
+            wget http://ip_repo/pentaho-5.1/packages/saiku-plugin-p5-2.6.zip
             unzip -n saiku-plugin-p5-2.6.zip -d /home/pentaho/server/biserver-ce/pentaho-solutions/system/
 
             #import already ad-hoc created file /etc/init.d/pentaho
-            wget http://ip_repo/pentaho -O /etc/init.d/pentaho
+            wget http://ip_repo/pentaho-5.1/conf/pentaho -O /etc/init.d/pentaho
             #import already ad-hoc modified version of start-pentaho.sh
             mv /home/pentaho/server/biserver-ce/start-pentaho.sh /home/pentaho/server/biserver-ce/start-pentaho.sh.OLD
-            wget http://ip_repo/start-pentaho.sh -O /home/pentaho/server/biserver-ce/start-pentaho.sh
+            wget http://ip_repo//pentaho-5.1/conf/start-pentaho.sh -O /home/pentaho/server/biserver-ce/start-pentaho.sh
             chmod 777 /home/pentaho/server/biserver-ce/*.sh
             chmod +x /etc/init.d/pentaho
             update-rc.d pentaho defaults
@@ -203,7 +207,7 @@ resources:
             sed -i "s/\"exit 0\"/exit/g" /etc/rc.local 
             sed -i "s/exit 0/sh \/home\/pentaho\/server\/biserver-ce\/start-pentaho.sh\nexit 0/g" /etc/rc.local
             # Driver JDBC (default postgresql 9.1, mysql 5.1, hsqldb e h2)
-            wget -O /usr/share/java/postgresql-9.2-1003.jdbc4.jar jdbc.postgresql.org/download/postgresql-9.2-1003.jdbc4.jar
+            wget -O /usr/share/java/postgresql-9.2-1003.jdbc4.jar http://ip_repo/pentaho-5.1/packages/postgresql-9.2-1003.jdbc4.jar
             ln -s /usr/share/java/postgresql-9.2-1003.jdbc4.jar /usr/share/java/postgresql-9.2-jdbc4.jar
             ln -s /usr/share/java/postgresql-9.2-jdbc4.jar /home/pentaho/server/biserver-ce/tomcat/lib/postgresql-9.2-jdbc4.jar
             ## install init script links to configure service autostart at reboot 
@@ -252,7 +256,7 @@ resources:
             pentahopassword: {get_attr: [pentaho_user_passwd, value]}
             admin_password: { get_param: admin_password }
             db_rootpassword: {get_attr: [postgres_root_passwd, value]}
-            ip_repo: cloudrepo.cloud.ba.infn.it
+            ip_repo: { get_param: ip_repo }
             mountpoint: { get_param: mountpoint }
             device_name: /dev/vdb
             $wait_handle$: { get_resource: wait_condition_handle}
