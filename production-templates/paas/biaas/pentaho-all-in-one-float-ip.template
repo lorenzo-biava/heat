@@ -55,9 +55,11 @@ parameters:
     type: string
     description: Type of volume to be used (encrypted or not)
     default: ""
-  ip_repo:
+  aux_repo_url:
     type: string
-    description: IP address or DNS name of the HTTP repository containing Pentaho software and customized configuration files
+    description: the base URL of the auxiliary HTTP repository containing template add-ons files
+    constraints:
+      - allowed_pattern: "^https?://.*"
 
 
 resources:
@@ -116,14 +118,14 @@ resources:
             echo 'JAVA_HOME="/usr/lib/jvm/java-1.7.0-openjdk-amd64"' >> /etc/environment
             #dowload and unzip pentaho server
             apt-get install -y zip unzip
-            wget http://ip_repo/pentaho-5.1/packages/biserver-ce-5.1.0.0-752.zip
+            wget --no-check-certificate aux_repo_url/pentaho-5.1/packages/biserver-ce-5.1.0.0-752.zip
             unzip -n biserver-ce-5.1.0.0-752.zip -d /home/pentaho/server
             echo 'CATALINA_HOME="/home/pentaho/server/biserver-ce/tomcat"' >> /etc/environment
             # Edit tomcat-users.xml configuration file adding pentaho users
             sed -i "s|<tomcat-users>|<tomcat-users>\n<role rolename=\"manager-gui\"/>\n<role rolename=\"admin-gui\"/>\n<role rolename=\"PENTAHO_ADMIN\"/>\n<user username=\"admin\" password=\"admin_password\" roles=\"manager-gui,admin-gui\"/>|g" /home/pentaho/server/biserver-ce/tomcat/conf/tomcat-users.xml
             #Install PostgreSQL  
             echo "deb http://apt.postgresql.org/pub/repos/apt/ precise-pgdg main" >> /etc/apt/sources.list
-            wget --quiet -O - http://ip_repo/pentaho-5.1/packages/ACCC4CF8.asc | sudo apt-key add -
+            wget --no-check-certificate --quiet -O - aux_repo_url/pentaho-5.1/packages/ACCC4CF8.asc | sudo apt-key add -
             apt-get install -y postgresql-9.3 postgresql-contrib
             # Configure Postgres Remote Access
             sed -i "s/#listen_addresses = 'localhost'/listen_addresses = '*'/g" /etc/postgresql/9.3/main/postgresql.conf
@@ -176,12 +178,12 @@ resources:
             
             #import already ad-hoc modified version of web.xml file fo Filter/Listner configuration
             mv /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/WEB-INF/web.xml /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/WEB-INF/web.xml.OLD
-            wget http://ip_repo/pentaho-5.1/conf/web.xml -O /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/WEB-INF/web.xml
+            wget --no-check-certificate aux_repo_url/pentaho-5.1/conf/web.xml -O /home/pentaho/server/biserver-ce/tomcat/webapps/pentaho/WEB-INF/web.xml
             [[ $? -eq 0 ]] || notify_err "Some problems occurred with ip repository for pentaho"
             
             #import already ad-hoc modified version of repository.xml file to PostgreSQL configuration
             mv /home/pentaho/server/biserver-ce/pentaho-solutions/system/jackrabbit/repository.xml /home/pentaho/server/biserver-ce/pentaho-solutions/system/jackrabbit/repository.xml.OLD
-            wget http://ip_repo/pentaho-5.1/conf/repository.xml -O /home/pentaho/server/biserver-ce/pentaho-solutions/system/jackrabbit/repository.xml
+            wget --no-check-certificate aux_repo_url/pentaho-5.1/conf/repository.xml -O /home/pentaho/server/biserver-ce/pentaho-solutions/system/jackrabbit/repository.xml
             
             #Configuring the repository.xml with postgresql user password
             sed -i "s/value=\"password/value=\"admin_password/g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/jackrabbit/repository.xml
@@ -209,17 +211,17 @@ resources:
             sed -i "s|<show-deprecation-warning>.$*|<show-deprecation-warning>false</show-deprecation-warning>|g" /home/pentaho/server/biserver-ce/pentaho-solutions/system/pentaho-jpivot-plugin/settings.xml
             #Customise Login
             cp /home/pentaho/server/biserver-ce/pentaho-solutions/system/common-ui/resources/themes/crystal/images/login-crystal-bg.jpeg /home/pentaho/server/biserver-ce/pentaho-solutions/system/common-ui/resources/themes/crystal/images/login-crystal-bgOLD.jpeg
-            wget http://ip_repo/pentaho-5.1/conf/login-crystal-bg.jpg -O /home/pentaho/server/biserver-ce/pentaho-solutions/system/common-ui/resources/themes/crystal/images/login-crystal-bg.jpeg
+            wget --no-check-certificate aux_repo_url/pentaho-5.1/conf/login-crystal-bg.jpg -O /home/pentaho/server/biserver-ce/pentaho-solutions/system/common-ui/resources/themes/crystal/images/login-crystal-bg.jpeg
 
             #Install Saiku Plugin
-            wget http://ip_repo/pentaho-5.1/packages/saiku-plugin-p5-2.6.zip
+            wget --no-check-certificate aux_repo_url/pentaho-5.1/packages/saiku-plugin-p5-2.6.zip
             unzip -n saiku-plugin-p5-2.6.zip -d /home/pentaho/server/biserver-ce/pentaho-solutions/system/
 
             #import already ad-hoc created file /etc/init.d/pentaho
-            wget http://ip_repo/pentaho-5.1/conf/pentaho -O /etc/init.d/pentaho
+            wget --no-check-certificate aux_repo_url/pentaho-5.1/conf/pentaho -O /etc/init.d/pentaho
             #import already ad-hoc modified version of start-pentaho.sh
             mv /home/pentaho/server/biserver-ce/start-pentaho.sh /home/pentaho/server/biserver-ce/start-pentaho.sh.OLD
-            wget http://ip_repo/pentaho-5.1/conf/start-pentaho.sh -O /home/pentaho/server/biserver-ce/start-pentaho.sh
+            wget --no-check-certificate aux_repo_url/pentaho-5.1/conf/start-pentaho.sh -O /home/pentaho/server/biserver-ce/start-pentaho.sh
             chmod 777 /home/pentaho/server/biserver-ce/*.sh
             chmod +x /etc/init.d/pentaho
             update-rc.d pentaho defaults
@@ -227,7 +229,7 @@ resources:
             sed -i "s/\"exit 0\"/exit/g" /etc/rc.local 
             sed -i "s/exit 0/sh \/home\/pentaho\/server\/biserver-ce\/start-pentaho.sh\nexit 0/g" /etc/rc.local
             # Driver JDBC (default postgresql 9.1, mysql 5.1, hsqldb e h2)
-            wget -O /usr/share/java/postgresql-9.2-1003.jdbc4.jar http://ip_repo/pentaho-5.1/packages/postgresql-9.2-1003.jdbc4.jar
+            wget --no-check-certificate -O /usr/share/java/postgresql-9.2-1003.jdbc4.jar aux_repo_url/pentaho-5.1/packages/postgresql-9.2-1003.jdbc4.jar
             ln -s /usr/share/java/postgresql-9.2-1003.jdbc4.jar /usr/share/java/postgresql-9.2-jdbc4.jar
             ln -s /usr/share/java/postgresql-9.2-jdbc4.jar /home/pentaho/server/biserver-ce/tomcat/lib/postgresql-9.2-jdbc4.jar
             ## install init script links to configure service autostart at reboot 
@@ -266,18 +268,18 @@ resources:
             apt-get install -y openjdk-7-jdk
             su root -c "echo 'export PENTAHO_JAVA_HOME=\"/usr/lib/jvm//java-7-openjdk-amd64\"' >> /etc/environment" 
             # Install Pentaho Report Designer
-            wget http://ip_repo/pentaho-5.1/packages/prd-ce-5.1.0.0-752.zip
+            wget --no-check-certificate aux_repo_url/pentaho-5.1/packages/prd-ce-5.1.0.0-752.zip
             [[ $? -eq 0 ]] || notify_err "Some problems occurred with Install Pentaho Report Designer"
             unzip -n prd-ce-5.1.0.0-752.zip -d /home/pentaho/client
             # Install Pentaho Data Integration (Kettle)
-            wget http://ip_repo/pentaho-5.1/packages/pdi-ce-5.1.0.0-752.zip
+            wget --no-check-certificate aux_repo_url/pentaho-5.1/packages/pdi-ce-5.1.0.0-752.zip
             [[ $? -eq 0 ]] || notify_err "Some problems occurred with Install Pentaho Data Integration "
             unzip -n pdi-ce-5.1.0.0-752.zip -d /home/pentaho/client
             # Install Postgresql driver
-            wget -O /home/pentaho/client/report-designer/lib/jdbc/postgresql-9.2-1003.jdbc4.jar http://ip_repo/pentaho-5.1/packages/postgresql-9.2-1003.jdbc4.jar
+            wget --no-check-certificate -O /home/pentaho/client/report-designer/lib/jdbc/postgresql-9.2-1003.jdbc4.jar aux_repo_url/pentaho-5.1/packages/postgresql-9.2-1003.jdbc4.jar
             [[ $? -eq 0 ]] || notify_err "Some problems occurred with Install Postgresql driver "
             #Install Mysql Driver
-            wget http://ip_repo/pentaho-5.1/packages/mysql-connector-java-5.1.17-bin.jar.zip
+            wget --no-check-certificate aux_repo_url/pentaho-5.1/packages/mysql-connector-java-5.1.17-bin.jar.zip
             [[ $? -eq 0 ]] || notify_err "Some problems occurred with Install Mysql driver "
             unzip -n mysql-connector-java-5.1.17-bin.jar.zip -d /home/pentaho/client/report-designer/lib/jdbc/ 
             unzip -n mysql-connector-java-5.1.17-bin.jar.zip -d /home/pentaho/client/data-integration/lib/  
@@ -338,7 +340,7 @@ resources:
 
             # Zabbix agent installation
             echo "Zabbix Agent installation and configuration"
-            wget http://repo.zabbix.com/zabbix/2.2/ubuntu/pool/main/z/zabbix-release/zabbix-release_2.2-1+trusty_all.deb
+            wget --no-check-certificate http://repo.zabbix.com/zabbix/2.2/ubuntu/pool/main/z/zabbix-release/zabbix-release_2.2-1+trusty_all.deb
             dpkg -i zabbix-release_2.2-1+trusty_all.deb
             apt-get update
             apt-get install -y zabbix-agent
@@ -356,7 +358,7 @@ resources:
             db_rootpassword: {get_attr: [postgres_root_passwd, value]}
             root_password: {get_attr: [pentaho_user_passwd, value]}
             admin_password: { get_param: admin_password } 
-            ip_repo: { get_param: ip_repo }
+            aux_repo_url: { get_param: aux_repo_url }
             design_user: { get_param: design_user }
             design_password: { get_param: design_password }
             mountpoint: { get_param: mountpoint }
