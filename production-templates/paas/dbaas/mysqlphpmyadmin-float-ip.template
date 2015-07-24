@@ -134,6 +134,7 @@ resources:
       name: 
         get_param: vm_name
       networks: { get_param: networks }
+      security_groups: { get_param: security_groups }
       user_data_format: RAW
       user_data: 
         str_replace: 
