@@ -9,7 +9,7 @@ parameters:
   vm_name:
     type: string
     label: VM name
-  instance_type:
+  flavor:
     type: string
     label: Instance Type
     description: Type of instance (flavor) to be used
@@ -21,10 +21,13 @@ parameters:
   security_groups:
     type: comma_delimited_list
     description: List of security group names or IDs
-    default: [ dbaas ]
-  net_id:
+    default: [ dbaas, zabbix ]
+  networks:
+    type: json
+    description: list of network IDs (in json format) into which the server will be deployed
+  float_net_id:
     type: string
-    description: ID of public (or private) sub network into which servers get deployed
+    description: ID of the external network
   db_name:
     type: string
     constraints: 
@@ -88,12 +91,26 @@ parameters:
     description: "Size of the volume to be created."
     type: number
   volume_type:
-    default: data
+    default: ""
     description: "Type of volume to be used (encrypted or not)"
     type: string
   mountpoint:
     default: /mnt/workingdir
     description: "The directory to provide to the user"
+    type: string
+  postgresql_port:
+    default: 5432
+    description: "The port for PostgreSQL server"
+    type: number
+  web_console_port:
+    default: 80
+    description: "The port for PostgreSQL web console (phpPgAdmin)"
+    type: number
+  zabbix_servers_dn:
+    description: "A CSV list of Zabbix servers domain name"
+    type: string
+  puppet_server_dn:
+    description: "The Puppet master domain name"
     type: string
   db_create_user:
     type: string
@@ -110,16 +127,14 @@ resources:
       availability_zone:
         get_param: availability_zone
       flavor:
-        get_param: instance_type
+        get_param: flavor
       image: PRISMA-Ubuntu-14.04-x86_64
       key_name:
         get_param: key_name
       name:
         get_param: vm_name
-      networks:
-        -
-          port:
-            get_resource: my_instance_port
+      networks: 
+        get_param: networks
       user_data_format: RAW
       user_data:
          str_replace:
@@ -137,6 +152,17 @@ resources:
             device_name: /dev/vdb
             mountpoint: 
               get_param: mountpoint
+            volume_id:
+              get_resource: cinder_volume
+            postgresql_port:
+              get_param: postgresql_port
+            web_console_port:
+              get_param: web_console_port
+            zabbix_servers_dn:
+              get_param: zabbix_servers_dn
+            puppet_server_dn:
+              get_param: puppet_server_dn
+
             $wait_handle$: { get_resource: wait_condition_handle}
 
           template: |
@@ -146,11 +172,22 @@ resources:
             function notify_err
             {
               message=$1
-              curl -X PUT -H 'Content-Type:application/json' -d "{\"Status\" : \"FAILURE\",\"Reason\" : \"$message\",\"UniqueId\" : \"ID1\",\"Data\" : \"Server Configuration NOT OK\"}" \
+              curl -k -X PUT -H 'Content-Type:application/json' -d "{\"Status\" : \"FAILURE\",\"Reason\" : \"$message\",\"UniqueId\" : \"ID1\",\"Data\" : \"Server Configuration NOT OK\"}" \
               "$wait_handle$"
               exit 1
             }
             sudo su -
+
+            # Configure the network interfaces, if needed
+            interfaces=$(ip link show | grep -Eo "[1-9]: [a-z0-9]+:" | grep -Ev "(lo|eth0)" | cut -d: -f2)
+
+            for i in ${interfaces[@]}; do
+                if [ -e /etc/network/interfaces.d/eth0.cfg ]; then
+                   sed "s/eth0/$i/g" /etc/network/interfaces.d/eth0.cfg  > /etc/network/interfaces.d/$i.cfg
+                fi
+                ifdown $i; ifup $i
+            done
+
             useradd -s /bin/bash -m postgres
             echo "postgres:db_rootpassword" | chpasswd
             echo 'postgres ALL=(ALL) ALL' | sudo tee -a /etc/sudoers
@@ -166,10 +203,14 @@ resources:
             service postgresql stop
             
             #Allow user to use volume
+            voldata_id=volume_id
+            voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
             mkdir -p mountpoint
-            mkfs.ext4 device_name && mount device_name mountpoint || notify_err "Some problems occurred with block device"
+            mkfs.ext4 ${voldata_dev} && mount ${voldata_dev} mountpoint || notify_err "Some problems occurred with block device"
             echo "Successfully device mounted"
-            echo 'device_name mountpoint ext4 defaults 0 0' >> /etc/fstab
+            #For reboot instance
+            echo "${voldata_dev} mountpoint ext4 defaults 0 0" >> /etc/fstab
+
             mkdir mountpoint/data
             chmod -R 0755 mountpoint
             
@@ -181,6 +222,7 @@ resources:
             cp -R -p /etc/postgresql/9.3/main mountpoint/data
             ln -s mountpoint/data /etc/postgresql/9.3/main
             sed -i "s:^data_directory.*$:data_directory\t\t= 'mountpoint/data':" /etc/postgresql/9.3/main/postgresql.conf
+            sed -i "s:port = 5432:port = postgresql_port:" /etc/postgresql/9.3/main/postgresql.conf
             # Configure Postgres Remote Access
             sed -i "s:^#listen_addresses = 'localhost':listen_addresses = '*':" /etc/postgresql/9.3/main/postgresql.conf
             echo "host    all             all             0.0.0.0/0               md5" | tee -a /etc/postgresql/9.3/main/pg_hba.conf
@@ -209,6 +251,7 @@ resources:
             sed -i "s/^#.*$allow from all/allow from all/" /etc/apache2/conf.d/phppgadmin
             cp /etc/apache2/conf.d/phppgadmin /etc/apache2/conf-available/phppgadmin.conf
             sed -i 's/\(^.*conf\[.extra_login_security.\] =\) true/\1 false/' /usr/share/phppgadmin/conf/config.inc.php
+            sed -i "s:\$conf\['servers'\]\[0\]\['port'\] = 5432:\$conf['servers'][0]['port'] = postgresql_port:" /usr/share/phppgadmin/conf/config.inc.php
             sed -i "s:^post_max_size.*$:post_max_size = 20M:" /etc/php5/apache2/php.ini
             sed -i "s:^upload_max_filesize.*$:upload_max_filesize = 20M:" /etc/php5/apache2/php.ini
             a2enconf phppgadmin
@@ -220,17 +263,15 @@ resources:
             update-rc.d postgresql defaults
 
             # Zabbix agent installation
-            echo "Zabbix Agent installation and configuration"
+            echo "Zabbix Agent setup"
             wget http://repo.zabbix.com/zabbix/2.2/ubuntu/pool/main/z/zabbix-release/zabbix-release_2.2-1+trusty_all.deb
             dpkg -i zabbix-release_2.2-1+trusty_all.deb
-            apt-get update   
+            apt-get update
             apt-get install -y zabbix-agent
-            zabbix_metrics="zabbix-metrics.infn.ponsmartcities-prisma.it"
-            zabbix_watcher="zabbix-watcher.infn.ponsmartcities-prisma.it"
-            sed -i -e "s/^Server=.*/Server=${zabbix_metrics},${zabbix_watcher}/" /etc/zabbix/zabbix_agentd.conf
-            sed -i -e "s/^ServerActive=.*/ServerActive=${zabbix_metrics},${zabbix_watcher}/" /etc/zabbix/zabbix_agentd.conf
+            sed -i -e "s/^Server=.*/Server=zabbix_servers_dn/" /etc/zabbix/zabbix_agentd.conf
+            sed -i -e "s/^ServerActive=.*/ServerActive=zabbix_servers_dn/" /etc/zabbix/zabbix_agentd.conf
             sed -i -e "s/^Hostname=.*/Hostname=${HOSTNAME//./_}/" /etc/zabbix/zabbix_agentd.conf
-            service zabbix-agent restart || notify_err "Some problems occurred with Zabbix Agent installation/configuration"
+            service zabbix-agent restart || notify_err "Some problems occurred with Zabbix Agent setup"
 
             # Puppet agent installation
             echo "Puppet agent installation and configuration"
@@ -238,11 +279,10 @@ resources:
             dpkg -i puppetlabs-release-trusty.deb
             apt-get update
             apt-get install -y puppet
-            puppetMaster="puppet-master.infn.ponsmartcities-prisma.it"
-            puppet agent --server $puppetMaster --onetime --no-daemonize --verbose
+            puppet agent --server puppet_server_dn --onetime --no-daemonize --verbose
             #[[ $? -eq 0 ]] || notify_err "Puppet agent failed. See logs for details"
 
-            curl -X PUT -H 'Content-Type:application/json' -d '{"Status" : "SUCCESS","Reason" : "mysql and phpmyadmin installed OK","UniqueId" : "ID1","Data" : "Server Configuration OK"}' \
+            curl -k -X PUT -H 'Content-Type:application/json' -d '{"Status" : "SUCCESS","Reason" : "mysql and phpmyadmin installed OK","UniqueId" : "ID1","Data" : "Server Configuration OK"}' \
             "$wait_handle$"
             exit 0
             
@@ -272,49 +312,52 @@ resources:
     properties:
       instance_uuid:
         get_resource: my_instance
-      mountpoint: /dev/vdb
+      mountpoint: null
       volume_id:
         get_resource: cinder_volume
 
-  my_instance_port:
-    type: "OS::Neutron::Port"
+  floating_ip:
+    type: OS::Neutron::FloatingIP
     properties:
-      network_id:
-        get_param: net_id
-      security_groups: 
-        get_param: security_groups 
+      floating_network_id: { get_param: float_net_id }
+
+  instance_floating_ip:
+    type: OS::Nova::FloatingIPAssociation
+    properties:
+      floating_ip: { get_resource: floating_ip }
+      server_id: { get_resource: my_instance }
+
     
 outputs: 
   instance_id: 
     description: "Resource ID assigned to the newly created instance"
     value: 
       get_resource: my_instance
-  instance_ip: 
-    description: "Public IP address of the newly created Nova instance."
-    value: 
-      get_attr: 
-        - my_instance
-        - first_address
-  manage_url: 
-    description: "phpPgAdmin can be accessed at"
-    value: 
-      str_replace: 
-        params: 
-          host: 
-            get_attr: 
-              - my_instance
-              - first_address
-        template: "http://host/phppgadmin"
-  endpoint:
-    description: "PostgreSQL server IP and port (host:port)"
+
+  instance_ips:
+    description: The IP address of the deployed instance
+    value: { get_attr: [my_instance, networks] }
+
+  instance_floating_ip:
+    description: Floating IP address of deployed instance in public network
+    value: { get_attr: [ floating_ip, floating_ip_address ] }
+
+  endpoints:
+    description: "Service endpoints"
     value:
-      str_replace:
-        params:
-          host:
-            get_attr:
-              - my_instance
-              - first_address
-        template: "host:5432"
+      "PostgreSQL":
+        str_replace:
+          params:
+            host: { get_attr: [ floating_ip, floating_ip_address ] }
+            postgresql_port: { get_param: postgresql_port }
+          template: "postgresql://host:postgresql_port"
+      "phpPgAdmin":
+        str_replace:
+          params:
+            host: { get_attr: [ floating_ip, floating_ip_address ] }
+            web_console_port: { get_param: web_console_port }
+          template: "http://host:web_console_port/phppgadmin"
+
 
 
 
