@@ -1,0 +1,336 @@
+heat_template_version: 2013-05-23
+
+description: "Deploy a single compute instance with MySQL + PHPMyAdmin + Volume (symbolic link)"
+
+parameters: 
+  key_name:
+    type: string
+    description: Name of a KeyPair
+  vm_name:
+    type: string
+    label: VM name
+  flavor:
+    type: string
+    label: Instance Type
+    description: Type of instance (flavor) to be used
+    default: small.bronze
+  availability_zone:
+    type: string
+    description: The Availability Zone to launch the instance.
+    default: nova
+  scheduler_hints:
+    type: string
+    description: The Host Aggregate to launch the instance in form of '{host:myhost}'.
+    default: nova
+  security_groups:
+    type: comma_delimited_list
+    description: List of security group names or IDs
+    default: [ dbaas, zabbix ]
+  networks:
+    type: json
+    description: ID of public (sub) network into which servers get deployed
+  float_net_id:
+    type: string
+    description: ID of public sub network into which servers get deployed
+  db_name: 
+    type: string
+    constraints: 
+      - 
+        length: 
+          max: 64
+          min: 4
+      - 
+        allowed_pattern: "[a-zA-Z0-9-_]*"
+        description: "db_name must contain only alphanumeric characters or _ or -"
+    default: tempdatabase
+    description: "Database name"
+  db_create_user:
+    type: string
+    label: db_create_user
+    description: Flag for db_user creation
+    constraints:
+      - 
+       allowed_values: [create,do_not_create]
+  db_username:
+    constraints:
+      -
+        length:
+          max: 16
+          min: 3
+      -
+        allowed_pattern: "[a-zA-Z][a-zA-Z0-9]*"
+        description: "db_username must begin with a letter and contain only alphanumeric characters"
+    default: admin
+    description: "Database admin account username"
+    hidden: true
+    type: string
+  db_password: 
+    constraints: 
+      - 
+        description: "admin account password  must be between 5 and 41 characters"
+        length: 
+          max: 41
+          min: 5
+      - 
+        allowed_pattern: "[a-zA-Z0-9]*"
+        description: "db_password must contain only alphanumeric characters"
+    description: "Database admin account password"
+    default: defpass
+    hidden: true
+    type: string
+  db_root_password: 
+    constraints: 
+      - 
+        description: "root password must be between 4 and 41 characters"
+        length: 
+          max: 41
+          min: 4
+      - 
+        allowed_pattern: "[a-zA-Z0-9]*"
+        description: "root password must contain only alphanumeric characters"
+    description: "Root password for MySQL"
+    hidden: true
+    type: string
+  volume_size: 
+    constraints: 
+      - 
+        description: "must be between 1 and 1024 Gb."
+        range: 
+          max: 1024
+          min: 1
+    default: 1
+    description: "Size of the volume to be created."
+    type: number
+  volume_type: 
+    default: data
+    description: "Type of volume to be used (encrypted or not)"
+    type: string
+  mountpoint: 
+    default: /mnt/workingdir
+    description: "The directory to provide to the user"
+    type: string
+  device_name: 
+    default: /dev/vdc
+    description: "The mount point for the attached volume"
+    type: string    
+  mysql_port:
+    default: 33306
+    description: "The port for MySQL server"
+    type: number
+  web_console_port:
+    default: 80
+    description: "The port for MySQL web console (phpMyAdmin)"
+    type: number
+  ubuntu_server_image_name:
+    description: "The Ubuntu Server image name for the current infrastructure"
+    type: string
+  zabbix_servers_dn:
+    description: "A CSV list of Zabbix servers domain name"
+    type: string  
+  puppet_server_dn:
+    description: "The Puppet master domain name"
+    type: string  
+
+resources: 
+  instance: 
+    type: OS::Nova::Server
+    properties: 
+      availability_zone: { get_param: availability_zone }
+      flavor: { get_param: flavor }
+      image: { get_param: ubuntu_server_image_name}
+      key_name: { get_param: key_name }
+      name: { get_param: vm_name }
+      networks: { get_param: networks }
+      security_groups: { get_param: security_groups }
+      user_data_format: RAW
+      user_data: 
+        str_replace: 
+          params: 
+            $db_name: { get_param: db_name }
+            $db_create_user: { get_param: db_create_user }
+            $db_username: { get_param: db_username }
+            $db_password: { get_param: db_password }
+            $db_root_password: { get_param: db_root_password }
+            $mountpoint: { get_param: mountpoint }
+            $device_name: { get_param: device_name }
+            $mysql_port: { get_param: mysql_port }
+            $web_console_port: { get_param: web_console_port }     
+            $zabbix_servers_dn: { get_param: zabbix_servers_dn }         
+            $puppet_server_dn: { get_param: puppet_server_dn }                    
+            $wait_handle$: { get_resource: wait_condition_handle}
+
+          template: |
+              #!/bin/bash -v
+              # Helper function to signal error condition
+              function notify_err
+               {
+                message=$1
+                curl -k -X PUT -H 'Content-Type:application/json' -d "{\"Status\" : \"FAILURE\",\"Reason\" : \"$message\",\"UniqueId\" : \"ID1\",\"Data\" : \"Server Configuration NOT OK\"}" \
+                       "$wait_handle$"
+                exit 1
+               }
+
+              sudo su -
+              # Hack to test internet connectivity
+              wget www.google.com || notify_err "Unable to connect to the Internet"
+              apt-get update
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get -q -y install mysql-server
+              # Setting bind address and port to mysql remote access
+              sed -i "s/127.0.0.1/0.0.0.0/g" /etc/mysql/my.cnf
+              sed -r -i "0,/mysqld/! s/port[[:space:]]+=.*/port = $mysql_port/" /etc/mysql/my.cnf 
+              service mysql restart
+              service mysql stop
+              #Allow user to use volume
+              mkdir -p $mountpoint
+              mkfs.ext4 $device_name && mount $device_name $mountpoint || notify_err "Some problems occurred mounting the block storage device"
+              echo "Successfully device mounted"
+              
+              #For reboot instance
+              echo '$device_name $mountpoint ext4 defaults 0 0' >> /etc/fstab
+              chmod -R 0755 $mountpoint
+              #Change MySQL datadir
+              cp -R -p /var/lib/mysql $mountpoint/data
+              chown -R mysql:mysql $mountpoint/data
+              sed -i "s:^datadir.*$:datadir\t\t= $mountpoint/data:" /etc/mysql/my.cnf
+              sed -i "s:/var/lib/mysql:$mountpoint/data:g" /etc/apparmor.d/usr.sbin.mysqld
+              /etc/init.d/apparmor reload
+              /etc/init.d/apparmor restart
+              mysql_install_db --datadir=$mountpoint/data
+              service mysql restart || notify_err "Some problems occurred with MySQL setup"
+              # Setup MySQL root password 
+              mysqladmin -u root password $db_rootpassword
+              if [[ "$db_createuser" == "create" ]]; then 
+              # Create a user and the DB
+              cat <<- EOF | mysql -u root --password=$db_rootpassword
+              CREATE DATABASE $db_name;
+              GRANT ALL PRIVILEGES ON $db_name.* TO "$db_user"@"localhost" IDENTIFIED BY "$db_password";
+              GRANT ALL PRIVILEGES ON $db_name.* TO "$db_user"@"%" IDENTIFIED BY "$db_password";
+              FLUSH PRIVILEGES;
+              EXIT
+              EOF
+              fi
+              if [[ "$db_createuser" != "create" ]]; then 
+              cat <<- EOF | mysql -u root --password=$db_rootpassword
+              CREATE DATABASE $db_name;
+              EXIT
+              EOF
+              fi
+              # Allow root remote access 
+              cat << EOF | mysql -u root --password=$db_rootpassword
+              UPDATE mysql.user SET Password = PASSWORD("$db_rootpassword") WHERE User = "root";
+              GRANT ALL PRIVILEGES ON *.* TO "root"@"%" IDENTIFIED BY "$db_rootpassword";
+              FLUSH PRIVILEGES;
+              EXIT
+              EOF
+              # Apache2 installation
+              apt-get install -y apache2
+              # PHP installation
+              apt-get install -q -y php5 libapache2-mod-php5 php5-mcrypt
+              # PHPMyAdmin installation
+              echo 'phpmyadmin phpmyadmin/dbconfig-install boolean true' | debconf-set-selections
+              echo "phpmyadmin phpmyadmin/app-password-confirm password $db_rootpassword" | debconf-set-selections
+              echo "phpmyadmin phpmyadmin/mysql/admin-pass password $db_rootpassword" | debconf-set-selections
+              echo "phpmyadmin phpmyadmin/mysql/app-pass password $db_rootpassword" | debconf-set-selections
+              echo 'phpmyadmin phpmyadmin/reconfigure-webserver multiselect apache2' | debconf-set-selections
+              apt-get install -q -y phpmyadmin php5-mysql
+              sed -i "/dbc_dbport=/c\dbc_dbport='$mysql_port'" /etc/dbconfig-common/phpmyadmin.conf 
+              echo "Include /etc/phpmyadmin/apache.conf" >> /etc/apache2/apache2.conf
+              php5enmod mcrypt 
+              service apache2 restart || notify_err "Some problems occurred with phpmyadmin setup"
+              
+              # install init script links to configure service autostart at reboot 
+              update-rc.d apache2 defaults
+              update-rc.d mysql defaults
+
+ 
+              # Zabbix agent installation
+              echo "Zabbix Agent setup"
+              wget http://repo.zabbix.com/zabbix/2.2/ubuntu/pool/main/z/zabbix-release/zabbix-release_2.2-1+trusty_all.deb
+              dpkg -i zabbix-release_2.2-1+trusty_all.deb
+              apt-get update              
+              apt-get install -y zabbix-agent               
+              sed -i -e "s/^Server=.*/Server=$zabbix_servers_dn/" /etc/zabbix/zabbix_agentd.conf
+              sed -i -e "s/^ServerActive=.*/ServerActive=$zabbix_servers_dn/" /etc/zabbix/zabbix_agentd.conf
+              sed -i -e "s/^Hostname=.*/Hostname=${HOSTNAME//./_}/" /etc/zabbix/zabbix_agentd.conf
+              service zabbix-agent restart || notify_err "Some problems occurred with Zabbix Agent setup"
+              
+              # Puppet agent installation
+              echo "Puppet agent installation and configuration"
+              wget https://apt.puppetlabs.com/puppetlabs-release-trusty.deb
+              dpkg -i puppetlabs-release-trusty.deb
+              apt-get update
+              apt-get install -y puppet
+              puppet agent --server $puppet_server_dn --onetime --no-daemonize --verbose
+              #[[ $? -eq 0 ]] || notify_err "Puppet agent failed. See logs for details"
+              
+              curl -k -X PUT -H 'Content-Type:application/json' -d '{"Status" : "SUCCESS","Reason" : "mysql and phpmyadmin installed OK","UniqueId" : "ID1","Data" : "Server Configuration OK"}' \
+                       "$wait_handle$"     
+              exit 0                
+
+  wait_condition:
+           type: AWS::CloudFormation::WaitCondition
+           depends_on: instance
+           properties:
+            Count: 1
+            Handle: { get_resource: wait_condition_handle }
+            Timeout: 3600
+
+  wait_condition_handle:
+           type: AWS::CloudFormation::WaitConditionHandle
+
+  cinder_volume:
+    type: "OS::Cinder::Volume"
+    properties:
+      availability_zone:
+        get_param: availability_zone
+      size:
+        get_param: volume_size
+      volume_type:
+        get_param: volume_type
+
+  volume_attachment:
+    type: "OS::Cinder::VolumeAttachment"
+    properties:
+      instance_uuid:
+        get_resource: instance
+      mountpoint: { get_param: device_name}
+      volume_id:
+        get_resource: cinder_volume
+ 
+  floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network_id: { get_param: float_net_id }
+
+  instance_floating_ip:
+    type: OS::Nova::FloatingIPAssociation
+    properties:
+      floating_ip: { get_resource: floating_ip }
+      server_id: { get_resource: instance }
+
+outputs:
+  instance_floating_ip:
+    description: Floating IP address of deployed instance in public network
+    value: { get_attr: [ floating_ip, floating_ip_address ] }
+  instance_id:
+    description: "Resource ID assigned to the newly created instance"
+    value: { get_resource: instance }
+  instance_ips:
+    description: "The IP addresses of the deployed instance"
+    value: { get_attr: [instance, networks, ] }
+  endpoints:
+    description: "Service endpoints"
+    value:
+      "MySQL":
+        str_replace:
+          params:
+            host: { get_attr: [ floating_ip, floating_ip_address ] }
+            mysql_port: { get_param: mysql_port }
+          template: "mysql://host:mysql_port"
+      "phpMyAdmin":
+        str_replace:
+          params:
+            host: { get_attr: [ floating_ip, floating_ip_address ] }
+            web_console_port: { get_param: web_console_port }
+          template: "http://host:web_console_port/phpmyadmin"

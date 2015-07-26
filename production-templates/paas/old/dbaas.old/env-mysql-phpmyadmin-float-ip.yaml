@@ -1,0 +1,7 @@
+parameters:
+  ubuntu_server_image_name: Ubuntu Trusty
+  mysql_port: 3306
+  web_console_port: 80
+  zabbix_servers_dn: "zabbix-metrics.infn.ponsmartcities-prisma.it, zabbix-watcher.infn.ponsmartcities-prisma.it"
+  puppet_server_dn: "puppet-master.infn.ponsmartcities-prisma.it"
+  device_name: /dev/vdc
