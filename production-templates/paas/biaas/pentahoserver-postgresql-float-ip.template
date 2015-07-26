@@ -341,7 +341,7 @@ outputs:
 
   instance_ips:
     description: The IP address of the deployed instance
-    value: { get_attr: [my_instance, networks] }
+    value: { get_attr: [user_data_instance, networks] }
 
   instance_floating_ip:
     description: Floating IP address of deployed instance in public network
