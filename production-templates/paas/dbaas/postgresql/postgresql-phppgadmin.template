@@ -327,20 +327,17 @@ outputs:
   endpoints:
     description: "Service endpoints"
     value:
-      "PostgreSQL":
+      "postgresql":
         str_replace:
           params:
             host: { get_attr: [my_instance, first_address] }
             postgresql_port:
               get_param: postgresql_port
           template: "postgresql://host:postgresql_port"
-      "phpPgAdmin":
+      "phppgadmin":
         str_replace:
           params:
             host: { get_attr: [my_instance, first_address] }
             web_console_port:
               get_param: web_console_port
           template: "http://host:web_console_port/phppgadmin"
-
-
-

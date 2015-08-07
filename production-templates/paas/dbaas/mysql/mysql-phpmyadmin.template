@@ -324,19 +324,17 @@ outputs:
   endpoints:
     description: "Service endpoints"
     value:
-      "MySQL":
+      "mysql":
         str_replace:
           params:
             host: { get_attr: [my_instance, first_address] }
             mysql_port:
               get_param: mysql_port
           template: "mysql://host:mysql_port"
-      "phpMyAdmin":
+      "phpmyadmin":
         str_replace:
           params:
             host: { get_attr: [my_instance, first_address] }
             web_console_port:
               get_param: web_console_port
           template: "http://host:web_console_port/phpmyadmin"
-
-

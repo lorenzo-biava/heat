@@ -111,3 +111,11 @@ outputs:
     description: The IP address of the deployed instance
     value: { get_attr: [my_instance, networks] }
 
+  endpoints:
+    description: "Service endpoints"
+    value:
+      "ssh":
+        str_replace:
+          params:
+            host: { get_attr: [my_instance, first_address] }
+          template: "ssh://host:22"

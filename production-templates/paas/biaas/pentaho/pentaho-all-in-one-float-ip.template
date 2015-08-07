@@ -12,7 +12,7 @@ parameters:
   vm_name:
     type: string
     label: VM name
-  instance_type:
+  flavor:
     type: string
     label: Instance Type
     description: Type of instance (flavor) to be used
@@ -21,18 +21,21 @@ parameters:
     type: string
     description: The Availability Zone to launch the instance.
     default: nova
-  net_id:
+  networks:
+    type: json
+    description: list of network IDs (in json format) into which the server will be deployed
+  float_net_id:
     type: string
-    description: ID of public (or private) sub network into which servers get deployed
+    description: ID of the external network
   security_groups:
     type: comma_delimited_list
     description: List of security group names or IDs
     default: [biaas,zabbix]
-  design_user:
+  designer_user:
     type: string
     description: Designer account username
     default: admin
-  design_password:
+  designer_password:
     type: string
     description: Designer account password
     hidden: true
@@ -40,9 +43,6 @@ parameters:
     type: string
     description: Password for Administration
     hidden: true
-  net_id:
-    type: string
-    description: ID of public (or private) sub network into which servers get deployed
   volume_size:
     type: number
     description: Size of the volume to be created.
@@ -60,6 +60,18 @@ parameters:
     description: the base URL of the auxiliary HTTP repository containing template add-ons files
     constraints:
       - allowed_pattern: "^https?://.*"
+  pentaho_port:
+    type: number
+    description: "The port for Pentaho service"
+  x2go_port:
+    type: number
+    description: "The port for VNC service"
+  zabbix_servers_dn:
+    description: "A CSV list of Zabbix servers domain name"
+    type: string
+  puppet_server_dn:
+    description: "The Puppet master domain name"
+    type: string
 
 resources:
   postgres_root_passwd: 
@@ -76,24 +88,48 @@ resources:
       name: { get_param: vm_name }
       key_name: { get_param: key_name }
       image: PRISMA-Ubuntu-14.04-x86_64-Desktop
-      flavor: { get_param: instance_type }
+      flavor: { get_param: flavor }
       availability_zone: { get_param: availability_zone }
-      networks:
-        - port: { get_resource: user_data_instance_port }
+      networks: { get_param: networks} 
+      security_groups: { get_param: security_groups}
       user_data_format: RAW
       user_data:
         str_replace:
+          params:
+            db_rootpassword: {get_attr: [postgres_root_passwd, value]}
+            root_password: {get_attr: [pentaho_user_passwd, value]}
+            admin_password: { get_param: admin_password } 
+            aux_repo_url: { get_param: aux_repo_url }
+            designer_user: { get_param: designer_user }
+            designer_password: { get_param: designer_password }
+            mountpoint: { get_param: mountpoint }            
+            volume_id: { get_resource: cinder_volume }     
+            user_public_key: { get_param: user_public_key }
+            zabbix_servers_dn: { get_param: zabbix_servers_dn }
+            puppet_server_dn: { get_param: puppet_server_dn }
+            $wait_handle$: { get_resource: wait_condition_handle}
           template: |
             #!/bin/bash -v
             # Helper function to signal error condition
             function notify_err
             {
              message=$1
-             curl -X PUT -H 'Content-Type:application/json' -d "{\"Status\" : \"FAILURE\",\"Reason\" : \"$message\",\"UniqueId\" : \"ID1\",\"Data\" : \"Server Configuration NOT OK\"}" \
+             curl -k -X PUT -H 'Content-Type:application/json' -d "{\"Status\" : \"FAILURE\",\"Reason\" : \"$message\",\"UniqueId\" : \"ID1\",\"Data\" : \"Server Configuration NOT OK\"}" \
              "$wait_handle$"
              exit 1
             }
             sudo su -
+
+            # Configure the network interfaces, if needed
+            interfaces=$(ip link show | grep -Eo "[1-9]: [a-z0-9]+:" | grep -Ev "(lo|eth0)" | cut -d: -f2)
+
+            for i in ${interfaces[@]}; do
+                if [ -e /etc/network/interfaces.d/eth0.cfg ]; then
+                   sed "s/eth0/$i/g" /etc/network/interfaces.d/eth0.cfg  > /etc/network/interfaces.d/$i.cfg
+                fi
+                ifdown $i; ifup $i
+            done
+
             # Create Linux User Account
             useradd -s /bin/bash -m pentaho
             echo "pentaho:root_password" | chpasswd
@@ -143,10 +179,14 @@ resources:
             sed -i "s|connect.*$|connect quartz postgres|g" /home/pentaho/server/biserver-ce/data/postgresql/create_jcr_postgresql.sql
 
             #Allow user to use volume
+            voldata_id=volume_id
+            voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
             mkdir -p mountpoint
-            mkfs.ext4 device_name && mount device_name mountpoint || notify_err "Some problems occurred with block device"
+            mkfs.ext4 ${voldata_dev} && mount ${voldata_dev} mountpoint || notify_err "Some problems occurred with block device"
             echo "Successfully device mounted"
-            echo 'device_name mountpoint ext4 defaults 0 0' >> /etc/fstab
+            #For reboot instance
+            echo "${voldata_dev} mountpoint ext4 defaults 0 0" >> /etc/fstab
+            
             mkdir mountpoint/data
             chmod -R 0755 mountpoint
 
@@ -284,9 +324,9 @@ resources:
             unzip -n mysql-connector-java-5.1.17-bin.jar.zip -d /home/pentaho/client/data-integration/lib/  
             # Configure existing Pentaho server as Report Designer Repository (IP:8080/pentaho is the default configuration)
             #sed -i "s|localhost|ip_server_bi|g" /home/pentaho/client/report-designer/resources/classic-engine.properties
-            sed -i "s|Designer|design_user|g" /home/pentaho/client/report-designer/resources/classic-engine.properties
+            sed -i "s|Designer|designer_user|g" /home/pentaho/client/report-designer/resources/classic-engine.properties
             sed -i "s|roles=None|roles=manager-gui,admin-gui|g" /home/pentaho/client/report-designer/resources/classic-engine.properties
-            sed -i "s|password|design_password|g" /home/pentaho/client/report-designer/resources/report-designer.properties
+            sed -i "s|password|designer_password|g" /home/pentaho/client/report-designer/resources/report-designer.properties
             #sed -i "s|localhost|ip_server_bi|g" /home/pentaho/client/report-designer/resources/report-designer.properties
             # Set configuration for better performance
             sed -i "s|-XX:MaxPermSize=512m|-XX:MaxPermSize=512m -Xmx1024M|g" /home/pentaho/client/report-designer/report-designer.sh
@@ -338,32 +378,19 @@ resources:
             chmod 755 /usr/bin/launch_pentaho_report.sh
 
             # Zabbix agent installation
-            echo "Zabbix Agent installation and configuration"
-            wget --no-check-certificate http://repo.zabbix.com/zabbix/2.2/ubuntu/pool/main/z/zabbix-release/zabbix-release_2.2-1+trusty_all.deb
+            echo "Zabbix Agent setup"
+            wget http://repo.zabbix.com/zabbix/2.2/ubuntu/pool/main/z/zabbix-release/zabbix-release_2.2-1+trusty_all.deb
             dpkg -i zabbix-release_2.2-1+trusty_all.deb
             apt-get update
             apt-get install -y zabbix-agent
-            zabbix_metrics="zabbix-metrics.infn.ponsmartcities-prisma.it"
-            zabbix_watcher="zabbix-watcher.infn.ponsmartcities-prisma.it"
-            sed -i -e "s/^Server=.*/Server=${zabbix_metrics},${zabbix_watcher}/" /etc/zabbix/zabbix_agentd.conf
-            sed -i -e "s/^ServerActive=.*/ServerActive=${zabbix_metrics},${zabbix_watcher}/" /etc/zabbix/zabbix_agentd.conf
+            sed -i -e "s/^Server=.*/Server=zabbix_servers_dn/" /etc/zabbix/zabbix_agentd.conf
+            sed -i -e "s/^ServerActive=.*/ServerActive=zabbix_servers_dn/" /etc/zabbix/zabbix_agentd.conf
             sed -i -e "s/^Hostname=.*/Hostname=${HOSTNAME//./_}/" /etc/zabbix/zabbix_agentd.conf
-            service zabbix-agent restart || notify_err "Some problems occurred with Zabbix Agent installation/configuration"
+            service zabbix-agent restart || notify_err "Some problems occurred with Zabbix Agent setup"
 
-            curl -X PUT -H 'Content-Type:application/json' -d '{"Status" : "SUCCESS","Reason" : "BI Client Tools and BI Server installed OK","UniqueId" : "ID1","Data" : "Server Configuration OK"}' \
+            curl -k -X PUT -H 'Content-Type:application/json' -d '{"Status" : "SUCCESS","Reason" : "BI Client Tools and BI Server installed OK","UniqueId" : "ID1","Data" : "Server Configuration OK"}' \
             "$wait_handle$" 
             exit 0
-          params:
-            db_rootpassword: {get_attr: [postgres_root_passwd, value]}
-            root_password: {get_attr: [pentaho_user_passwd, value]}
-            admin_password: { get_param: admin_password } 
-            aux_repo_url: { get_param: aux_repo_url }
-            design_user: { get_param: design_user }
-            design_password: { get_param: design_password }
-            mountpoint: { get_param: mountpoint }
-            device_name: /dev/vdb
-            $wait_handle$: { get_resource: wait_condition_handle}
-            user_public_key: { get_param: user_public_key }
 
   wait_condition:
     type: AWS::CloudFormation::WaitCondition
@@ -382,40 +409,58 @@ resources:
       size: { get_param: volume_size }
       availability_zone: { get_param: availability_zone }
       volume_type: { get_param: volume_type }
+
   volume_attachment:
     type: OS::Cinder::VolumeAttachment
     properties:
       volume_id: { get_resource: cinder_volume }
       instance_uuid: { get_resource: user_data_instance }
-      mountpoint: /dev/vdb
+      mountpoint: null
 
-  user_data_instance_port:
-    type: OS::Neutron::Port
+  floating_ip:
+    type: OS::Neutron::FloatingIP
     properties:
-      network_id: { get_param: net_id }
-      security_groups: { get_param: security_groups }
+      floating_network_id: { get_param: float_net_id }
+
+  instance_floating_ip:
+    type: OS::Nova::FloatingIPAssociation
+    properties:
+      floating_ip: { get_resource: floating_ip }
+      server_id: { get_resource: user_data_instance }
 
 outputs:
-  instance_ip:
-    description: The IP address of the deployed instance
-    value: { get_attr: [user_data_instance, first_address] }
   instance_id:
     description: Resource ID assigned to the newly created instance
     value: { get_resource: user_data_instance }
-  manage_url: 
-    description: Pentaho BI Community Edition can be accessed at 
+
+  instance_ips:
+    description: The IP address of the deployed instance
+    value: { get_attr: [user_data_instance, networks] }
+
+  instance_floating_ip:
+    description: Floating IP address of deployed instance in public network
+    value: { get_attr: [ floating_ip, floating_ip_address ] }
+
+  endpoints:
+    description: "Service endpoints"
     value:
-      str_replace:
-        template: http://host:8080/pentaho
-        params:
-          host: { get_attr: [user_data_instance, first_address] } 
-  postgres_root_passwd:
-    description: Password for PostgreSQL root user 
+      "pentaho":
+        str_replace:
+          params:
+            host: { get_attr: [ floating_ip, floating_ip_address ] }
+            pentaho_port: { get_param: pentaho_port }
+          template: "http://host:pentaho_port/pentaho"
+      "x2go":
+        str_replace:
+          params:
+            host: { get_attr: [ floating_ip, floating_ip_address ] }
+            x2go_port: { get_param: x2go_port }
+          template: "x2go://host:x2go_port"
+
+  postgresql_root_password:
+    description: Password for PostgreSQL root user
     value: {  get_resource: postgres_root_passwd }
-  pentaho_user_passwd:
-    description: Password for pentaho Linux user  
-    value: { get_resource: pentaho_user_passwd} 
-
-        
-
-
+  
+  pentaho_user_password:
+    description: Password for pentaho Linux user       
+    value: { get_resource: pentaho_user_passwd}

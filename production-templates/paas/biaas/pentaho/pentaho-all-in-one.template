@@ -1,18 +1,21 @@
 heat_template_version: 2013-05-23
 
-description: Template to deploy a single user data instance (jdk7 + Pentaho 5.1 + PostgreSQL 9.3)
+description: Template to deploy a Pentaho Client with Data Integration and Report Design Tools
 
 parameters:
   key_name:
     type: string
-    description: Name of a KeyPair 
+    description: Name of a KeyPair
+  user_public_key:
+    type: string
+    description: public user key  
   vm_name:
     type: string
     label: VM name
   flavor:
     type: string
     label: Instance Type
-    description: Type of instance (flavor) to be used-large.bronze for extern
+    description: Type of instance (flavor) to be used
     default: large.bronze
   availability_zone:
     type: string
@@ -25,6 +28,14 @@ parameters:
     type: comma_delimited_list
     description: List of security group names or IDs
     default: [biaas,zabbix]
+  designer_user:
+    type: string
+    description: Designer account username
+    default: admin
+  designer_password:
+    type: string
+    description: Designer account password
+    hidden: true
   admin_password:
     type: string
     description: Password for Administration
@@ -49,6 +60,9 @@ parameters:
   pentaho_port:
     type: number
     description: "The port for Pentaho service"
+  x2go_port:
+    type: number
+    description: "The port for VNC service"
   zabbix_servers_dn:
     description: "A CSV list of Zabbix servers domain name"
     type: string
@@ -70,7 +84,7 @@ resources:
     properties:
       name: { get_param: vm_name }
       key_name: { get_param: key_name }
-      image: PRISMA-Ubuntu-14.04-x86_64
+      image: PRISMA-Ubuntu-14.04-x86_64-Desktop
       flavor: { get_param: flavor }
       availability_zone: { get_param: availability_zone }
       networks: { get_param: networks} 
@@ -78,6 +92,19 @@ resources:
       user_data_format: RAW
       user_data:
         str_replace:
+          params:
+            db_rootpassword: {get_attr: [postgres_root_passwd, value]}
+            root_password: {get_attr: [pentaho_user_passwd, value]}
+            admin_password: { get_param: admin_password } 
+            aux_repo_url: { get_param: aux_repo_url }
+            designer_user: { get_param: designer_user }
+            designer_password: { get_param: designer_password }
+            mountpoint: { get_param: mountpoint }            
+            volume_id: { get_resource: cinder_volume }     
+            user_public_key: { get_param: user_public_key }
+            zabbix_servers_dn: { get_param: zabbix_servers_dn }
+            puppet_server_dn: { get_param: puppet_server_dn }
+            $wait_handle$: { get_resource: wait_condition_handle}
           template: |
             #!/bin/bash -v
             # Helper function to signal error condition
@@ -90,24 +117,33 @@ resources:
             }
             sudo su -
 
-              # Configure the network interfaces, if needed
-              interfaces=$(ip link show | grep -Eo "[1-9]: [a-z0-9]+:" | grep -Ev "(lo|eth0)" | cut -d: -f2)
+            # Configure the network interfaces, if needed
+            interfaces=$(ip link show | grep -Eo "[1-9]: [a-z0-9]+:" | grep -Ev "(lo|eth0)" | cut -d: -f2)
 
-              for i in ${interfaces[@]}; do
+            for i in ${interfaces[@]}; do
                 if [ -e /etc/network/interfaces.d/eth0.cfg ]; then
                    sed "s/eth0/$i/g" /etc/network/interfaces.d/eth0.cfg  > /etc/network/interfaces.d/$i.cfg
                 fi
                 ifdown $i; ifup $i
-              done
+            done
 
             # Create Linux User Account
             useradd -s /bin/bash -m pentaho
-            echo "pentaho:pentahopassword" | chpasswd
+            echo "pentaho:root_password" | chpasswd
             mkdir -p /home/pentaho/server/biserver-ce
             mkdir -p .pentaho
-            echo 'pentaho ALL=(ALL) ALL' | sudo tee -a /etc/sudoers
-            apt-get update 
+            mkdir -p /home/pentaho/client
+            mkdir /home/pentaho/Desktop
+            chown pentaho:pentaho /home/pentaho/Desktop
+            chmod 755 /home/pentaho/Desktop
             sed -i "s:^127.0.0.1:127.0.0.1 $HOSTNAME:" /etc/hosts
+            mkdir /home/pentaho/.ssh
+            chmod 700 /home/pentaho/.ssh
+            echo "user_public_key"  >> /home/pentaho/.ssh/authorized_keys
+            chmod 600 /home/pentaho/.ssh/authorized_keys
+            chown pentaho:pentaho /home/pentaho/.ssh
+            chown pentaho:pentaho /home/pentaho/.ssh/authorized_keys
+            apt-get update 
             apt-get install -y openssh-server openssl bash libssl1.0.0
             #install jdk
             apt-get install -y openjdk-7-jdk 
@@ -258,39 +294,100 @@ resources:
             curl -u admin:password -X PUT -H"Content-Type: application/json" -d '{"userName": "admin", "password" : "admin_password"}' http://127.0.0.1:8080/pentaho/api/userroledao/updatePassword
 
 
-              # Zabbix agent installation
-              echo "Zabbix Agent setup"
-              wget http://repo.zabbix.com/zabbix/2.2/ubuntu/pool/main/z/zabbix-release/zabbix-release_2.2-1+trusty_all.deb
-              dpkg -i zabbix-release_2.2-1+trusty_all.deb
-              apt-get update
-              apt-get install -y zabbix-agent
-              sed -i -e "s/^Server=.*/Server=zabbix_servers_dn/" /etc/zabbix/zabbix_agentd.conf
-              sed -i -e "s/^ServerActive=.*/ServerActive=zabbix_servers_dn/" /etc/zabbix/zabbix_agentd.conf
-              sed -i -e "s/^Hostname=.*/Hostname=${HOSTNAME//./_}/" /etc/zabbix/zabbix_agentd.conf
-              service zabbix-agent restart || notify_err "Some problems occurred with Zabbix Agent setup"
+            #Install x2go
+            sudo add-apt-repository ppa:x2go/stable
+            sudo apt-get update
+            sudo apt-get install -y x2goserver x2goserver-xsession
+            #Install zip e unzip
+            apt-get install -y zip unzip 
+            # Install jdk
+            apt-get install -y openjdk-7-jdk
+            su root -c "echo 'export PENTAHO_JAVA_HOME=\"/usr/lib/jvm//java-7-openjdk-amd64\"' >> /etc/environment" 
+            # Install Pentaho Report Designer
+            wget --no-check-certificate aux_repo_url/pentaho-5.1/packages/prd-ce-5.1.0.0-752.zip
+            [[ $? -eq 0 ]] || notify_err "Some problems occurred with Install Pentaho Report Designer"
+            unzip -n prd-ce-5.1.0.0-752.zip -d /home/pentaho/client
+            # Install Pentaho Data Integration (Kettle)
+            wget --no-check-certificate aux_repo_url/pentaho-5.1/packages/pdi-ce-5.1.0.0-752.zip
+            [[ $? -eq 0 ]] || notify_err "Some problems occurred with Install Pentaho Data Integration "
+            unzip -n pdi-ce-5.1.0.0-752.zip -d /home/pentaho/client
+            # Install Postgresql driver
+            wget --no-check-certificate -O /home/pentaho/client/report-designer/lib/jdbc/postgresql-9.2-1003.jdbc4.jar aux_repo_url/pentaho-5.1/packages/postgresql-9.2-1003.jdbc4.jar
+            [[ $? -eq 0 ]] || notify_err "Some problems occurred with Install Postgresql driver "
+            #Install Mysql Driver
+            wget --no-check-certificate aux_repo_url/pentaho-5.1/packages/mysql-connector-java-5.1.17-bin.jar.zip
+            [[ $? -eq 0 ]] || notify_err "Some problems occurred with Install Mysql driver "
+            unzip -n mysql-connector-java-5.1.17-bin.jar.zip -d /home/pentaho/client/report-designer/lib/jdbc/ 
+            unzip -n mysql-connector-java-5.1.17-bin.jar.zip -d /home/pentaho/client/data-integration/lib/  
+            # Configure existing Pentaho server as Report Designer Repository (IP:8080/pentaho is the default configuration)
+            #sed -i "s|localhost|ip_server_bi|g" /home/pentaho/client/report-designer/resources/classic-engine.properties
+            sed -i "s|Designer|designer_user|g" /home/pentaho/client/report-designer/resources/classic-engine.properties
+            sed -i "s|roles=None|roles=manager-gui,admin-gui|g" /home/pentaho/client/report-designer/resources/classic-engine.properties
+            sed -i "s|password|designer_password|g" /home/pentaho/client/report-designer/resources/report-designer.properties
+            #sed -i "s|localhost|ip_server_bi|g" /home/pentaho/client/report-designer/resources/report-designer.properties
+            # Set configuration for better performance
+            sed -i "s|-XX:MaxPermSize=512m|-XX:MaxPermSize=512m -Xmx1024M|g" /home/pentaho/client/report-designer/report-designer.sh
+            # Create desktop icon for App launching
+            cat << EOF > /usr/share/applications/pentaho-prd.desktop
+            [Desktop Entry]
+            Version=1.0
+            Name=Pentaho-Reporting
+            Comment=Pentaho Reporting App
+            Exec=/usr/bin/launch_pentaho_report.sh
+            Icon=/home/pentaho/client/data-integration/docs/English/welcome/img/header-image-1.png
+            Terminal=false
+            Type=Application
+            Categories=Utility;Application;
+            EOF
+            ########
+            cat << EOF > /usr/share/applications/pentaho-pdi.desktop
+            [Desktop Entry]
+            Version=1.0
+            Name=Pentaho-Data-Integration
+            Comment=Pentaho ETL App
+            Exec=/usr/bin/launch_pentaho_pdi.sh
+            Icon=/home/pentaho/client/data-integration/docs/English/welcome/img/header-image-2.png
+            Terminal=false
+            Type=Application
+            Categories=Utility;Application;
+            EOF
+            #######
+            cat << EOF > /usr/bin/launch_pentaho_report.sh
+            #!/bin/bash
+            unset PENTAHO_JAVA_HOME PENTAHO_JAVA
+            cd /home/pentaho/client/report-designer
+            ./report-designer.sh
+            EOF
+            #######
+            cat << EOF > /usr/bin/launch_pentaho_pdi.sh
+            #!/bin/bash
+            unset PENTAHO_JAVA_HOME PENTAHO_JAVA
+            cd /home/pentaho/client/data-integration
+            ./spoon.sh
+            EOF
+            cp -f /usr/share/applications/pentaho-pdi.desktop /home/pentaho/Desktop/pentaho-pdi.desktop
+            chown pentaho:pentaho /home/pentaho/Desktop/pentaho-pdi.desktop
+            chmod +x /home/pentaho/Desktop/pentaho-pdi.desktop
+            chmod 755 /usr/bin/launch_pentaho_pdi.sh
+            cp -f /usr/share/applications/pentaho-prd.desktop /home/pentaho/Desktop/pentaho-prd.desktop
+            chown pentaho:pentaho /home/pentaho/Desktop/pentaho-prd.desktop
+            chmod +x /home/pentaho/Desktop/pentaho-prd.desktop
+            chmod 755 /usr/bin/launch_pentaho_report.sh
 
-              # Puppet agent installation
-              echo "Puppet agent installation and configuration"
-              wget https://apt.puppetlabs.com/puppetlabs-release-trusty.deb
-              dpkg -i puppetlabs-release-trusty.deb
-              apt-get update
-              apt-get install -y puppet
-              puppet agent --server puppet_server_dn --onetime --no-daemonize --verbose
-              #[[ $? -eq 0 ]] || notify_err "Puppet agent failed. See logs for details"
+            # Zabbix agent installation
+            echo "Zabbix Agent setup"
+            wget http://repo.zabbix.com/zabbix/2.2/ubuntu/pool/main/z/zabbix-release/zabbix-release_2.2-1+trusty_all.deb
+            dpkg -i zabbix-release_2.2-1+trusty_all.deb
+            apt-get update
+            apt-get install -y zabbix-agent
+            sed -i -e "s/^Server=.*/Server=zabbix_servers_dn/" /etc/zabbix/zabbix_agentd.conf
+            sed -i -e "s/^ServerActive=.*/ServerActive=zabbix_servers_dn/" /etc/zabbix/zabbix_agentd.conf
+            sed -i -e "s/^Hostname=.*/Hostname=${HOSTNAME//./_}/" /etc/zabbix/zabbix_agentd.conf
+            service zabbix-agent restart || notify_err "Some problems occurred with Zabbix Agent setup"
 
-            curl -k -X PUT -H 'Content-Type:application/json' -d '{"Status" : "SUCCESS","Reason" : "Pentaho with Postgresql installed OK","UniqueId" : "ID1","Data" : "Server Configuration OK"}' \
-            "$wait_handle$"     
+            curl -k -X PUT -H 'Content-Type:application/json' -d '{"Status" : "SUCCESS","Reason" : "BI Client Tools and BI Server installed OK","UniqueId" : "ID1","Data" : "Server Configuration OK"}' \
+            "$wait_handle$" 
             exit 0
-          params:
-            pentahopassword: {get_attr: [pentaho_user_passwd, value]}
-            admin_password: { get_param: admin_password }
-            db_rootpassword: {get_attr: [postgres_root_passwd, value]}
-            aux_repo_url: { get_param: aux_repo_url }
-            mountpoint: { get_param: mountpoint }
-            volume_id: { get_resource: cinder_volume }
-            zabbix_servers_dn: { get_param: zabbix_servers_dn }
-            puppet_server_dn: { get_param: puppet_server_dn }
-            $wait_handle$: { get_resource: wait_condition_handle}
 
   wait_condition:
     type: AWS::CloudFormation::WaitCondition
@@ -298,7 +395,7 @@ resources:
     properties:
      Count: 1
      Handle: { get_resource: wait_condition_handle }
-     Timeout: 3500
+     Timeout: 5000
 
   wait_condition_handle:
            type: AWS::CloudFormation::WaitConditionHandle
@@ -317,7 +414,6 @@ resources:
       instance_uuid: { get_resource: user_data_instance }
       mountpoint: null
 
-
 outputs:
   instance_id:
     description: Resource ID assigned to the newly created instance
@@ -330,20 +426,23 @@ outputs:
   endpoints:
     description: "Service endpoints"
     value:
-      "Pentaho Web UI":
+      "pentaho":
         str_replace:
           params:
             host: { get_attr: [user_data_instance, first_address] }
-            pentaho_port:
-              get_param: pentaho_port
+            pentaho_port: { get_param: pentaho_port }
           template: "http://host:pentaho_port/pentaho"
+      "x2go":
+        str_replace:
+          params:
+            host: { get_attr: [user_data_instance, first_address] }
+            x2go_port: { get_param: x2go_port }
+          template: "x2go://host:x2go_port"
 
-  postgres_root_passwd:
+  postgresql_root_password:
     description: Password for PostgreSQL root user
     value: {  get_resource: postgres_root_passwd }
-
-  pentaho_user_passwd:
+  
+  pentaho_user_password:
     description: Password for pentaho Linux user       
     value: { get_resource: pentaho_user_passwd}
-
-

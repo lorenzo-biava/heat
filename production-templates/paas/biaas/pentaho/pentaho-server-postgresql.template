@@ -21,9 +21,6 @@ parameters:
   networks:
     type: json
     description: list of network IDs (in json format) into which the server will be deployed
-  float_net_id:
-    type: string
-    description: ID of the external network
   security_groups:
     type: comma_delimited_list
     description: List of security group names or IDs
@@ -59,7 +56,6 @@ parameters:
     description: "The Puppet master domain name"
     type: string
 
-
 resources:
   postgres_root_passwd: 
     type: OS::Heat::RandomString
@@ -77,11 +73,21 @@ resources:
       image: PRISMA-Ubuntu-14.04-x86_64
       flavor: { get_param: flavor }
       availability_zone: { get_param: availability_zone }
-      networks: { get_param: networks }
+      networks: { get_param: networks} 
       security_groups: { get_param: security_groups}
       user_data_format: RAW
       user_data:
         str_replace:
+          params:
+            pentahopassword: {get_attr: [pentaho_user_passwd, value]}
+            admin_password: { get_param: admin_password }
+            db_rootpassword: {get_attr: [postgres_root_passwd, value]}
+            aux_repo_url: { get_param: aux_repo_url }
+            mountpoint: { get_param: mountpoint }
+            volume_id: { get_resource: cinder_volume }
+            zabbix_servers_dn: { get_param: zabbix_servers_dn }
+            puppet_server_dn: { get_param: puppet_server_dn }
+            $wait_handle$: { get_resource: wait_condition_handle}
           template: |
             #!/bin/bash -v
             # Helper function to signal error condition
@@ -94,15 +100,15 @@ resources:
             }
             sudo su -
 
-              # Configure the network interfaces, if needed
-              interfaces=$(ip link show | grep -Eo "[1-9]: [a-z0-9]+:" | grep -Ev "(lo|eth0)" | cut -d: -f2)
+            # Configure the network interfaces, if needed
+            interfaces=$(ip link show | grep -Eo "[1-9]: [a-z0-9]+:" | grep -Ev "(lo|eth0)" | cut -d: -f2)
 
-              for i in ${interfaces[@]}; do
+            for i in ${interfaces[@]}; do
                 if [ -e /etc/network/interfaces.d/eth0.cfg ]; then
                    sed "s/eth0/$i/g" /etc/network/interfaces.d/eth0.cfg  > /etc/network/interfaces.d/$i.cfg
                 fi
                 ifdown $i; ifup $i
-              done
+            done
 
             # Create Linux User Account
             useradd -s /bin/bash -m pentaho
@@ -143,7 +149,6 @@ resources:
             sed -i "s|connect.*$|connect quartz postgres|g" /home/pentaho/server/biserver-ce/data/postgresql/create_repository_postgresql.sql
             sed -i "s|connect.*$|connect quartz postgres|g" /home/pentaho/server/biserver-ce/data/postgresql/create_jcr_postgresql.sql
 
-
             #Allow user to use volume
             voldata_id=volume_id
             voldata_dev="/dev/disk/by-id/virtio-$(echo ${voldata_id} | cut -c -20)"
@@ -152,7 +157,7 @@ resources:
             echo "Successfully device mounted"
             #For reboot instance
             echo "${voldata_dev} mountpoint ext4 defaults 0 0" >> /etc/fstab
-
+            
             mkdir mountpoint/data
             chmod -R 0755 mountpoint
 
@@ -226,7 +231,7 @@ resources:
             wget --no-check-certificate aux_repo_url/pentaho-5.1/conf/pentaho -O /etc/init.d/pentaho
             #import already ad-hoc modified version of start-pentaho.sh
             mv /home/pentaho/server/biserver-ce/start-pentaho.sh /home/pentaho/server/biserver-ce/start-pentaho.sh.OLD
-            wget --no-check-certificate aux_repo_url//pentaho-5.1/conf/start-pentaho.sh -O /home/pentaho/server/biserver-ce/start-pentaho.sh
+            wget --no-check-certificate aux_repo_url/pentaho-5.1/conf/start-pentaho.sh -O /home/pentaho/server/biserver-ce/start-pentaho.sh
             chmod 777 /home/pentaho/server/biserver-ce/*.sh
             chmod +x /etc/init.d/pentaho
             update-rc.d pentaho defaults
@@ -252,7 +257,7 @@ resources:
             else
               let MY_CHECK-=1
             fi
-            sleep 5;
+            sleep 1;
             done
             # Delete default user pat, suzy, tiffany
             curl -u admin:password -X PUT -H"Content-Type: application/json" http://127.0.0.1:8080/pentaho/api/userroledao/deleteUsers?userNames=tiffany
@@ -263,41 +268,29 @@ resources:
             curl -u admin:password -X PUT -H"Content-Type: application/json" -d '{"userName": "admin", "password" : "admin_password"}' http://127.0.0.1:8080/pentaho/api/userroledao/updatePassword
 
 
+            # Zabbix agent installation
+            echo "Zabbix Agent setup"
+            wget http://repo.zabbix.com/zabbix/2.2/ubuntu/pool/main/z/zabbix-release/zabbix-release_2.2-1+trusty_all.deb
+            dpkg -i zabbix-release_2.2-1+trusty_all.deb
+            apt-get update
+            apt-get install -y zabbix-agent
+            sed -i -e "s/^Server=.*/Server=zabbix_servers_dn/" /etc/zabbix/zabbix_agentd.conf
+            sed -i -e "s/^ServerActive=.*/ServerActive=zabbix_servers_dn/" /etc/zabbix/zabbix_agentd.conf
+            sed -i -e "s/^Hostname=.*/Hostname=${HOSTNAME//./_}/" /etc/zabbix/zabbix_agentd.conf
+            service zabbix-agent restart || notify_err "Some problems occurred with Zabbix Agent setup"
 
-              # Zabbix agent installation
-              echo "Zabbix Agent setup"
-              wget http://repo.zabbix.com/zabbix/2.2/ubuntu/pool/main/z/zabbix-release/zabbix-release_2.2-1+trusty_all.deb
-              dpkg -i zabbix-release_2.2-1+trusty_all.deb
-              apt-get update
-              apt-get install -y zabbix-agent
-              sed -i -e "s/^Server=.*/Server=zabbix_servers_dn/" /etc/zabbix/zabbix_agentd.conf
-              sed -i -e "s/^ServerActive=.*/ServerActive=zabbix_servers_dn/" /etc/zabbix/zabbix_agentd.conf
-              sed -i -e "s/^Hostname=.*/Hostname=${HOSTNAME//./_}/" /etc/zabbix/zabbix_agentd.conf
-              service zabbix-agent restart || notify_err "Some problems occurred with Zabbix Agent setup"
-
-              # Puppet agent installation
-              echo "Puppet agent installation and configuration"
-              wget https://apt.puppetlabs.com/puppetlabs-release-trusty.deb
-              dpkg -i puppetlabs-release-trusty.deb
-              apt-get update
-              apt-get install -y puppet
-              puppet agent --server puppet_server_dn --onetime --no-daemonize --verbose
-              #[[ $? -eq 0 ]] || notify_err "Puppet agent failed. See logs for details"
-
+            # Puppet agent installation
+            echo "Puppet agent installation and configuration"
+            wget https://apt.puppetlabs.com/puppetlabs-release-trusty.deb
+            dpkg -i puppetlabs-release-trusty.deb
+            apt-get update
+            apt-get install -y puppet
+            puppet agent --server puppet_server_dn --onetime --no-daemonize --verbose
+            #[[ $? -eq 0 ]] || notify_err "Puppet agent failed. See logs for details"
 
             curl -k -X PUT -H 'Content-Type:application/json' -d '{"Status" : "SUCCESS","Reason" : "Pentaho with Postgresql installed OK","UniqueId" : "ID1","Data" : "Server Configuration OK"}' \
             "$wait_handle$"     
             exit 0
-          params:
-            pentahopassword: {get_attr: [pentaho_user_passwd, value]}
-            admin_password: { get_param: admin_password }
-            db_rootpassword: {get_attr: [postgres_root_passwd, value]}
-            aux_repo_url: { get_param: aux_repo_url }
-            mountpoint: { get_param: mountpoint }
-            volume_id: { get_resource: cinder_volume }
-            zabbix_servers_dn: { get_param: zabbix_servers_dn }
-            puppet_server_dn: { get_param: puppet_server_dn }
-            $wait_handle$: { get_resource: wait_condition_handle}
 
   wait_condition:
     type: AWS::CloudFormation::WaitCondition
@@ -324,50 +317,30 @@ resources:
       instance_uuid: { get_resource: user_data_instance }
       mountpoint: null
 
-  floating_ip:
-    type: OS::Neutron::FloatingIP
-    properties:
-      floating_network_id: { get_param: float_net_id }
 
-  instance_floating_ip:
-    type: OS::Nova::FloatingIPAssociation
-    properties:
-      floating_ip: { get_resource: floating_ip }
-      server_id: { get_resource: user_data_instance }
-
-
-  
 outputs:
+  instance_id:
+    description: Resource ID assigned to the newly created instance
+    value: { get_resource: user_data_instance }
 
   instance_ips:
     description: The IP address of the deployed instance
     value: { get_attr: [user_data_instance, networks] }
 
-  instance_floating_ip:
-    description: Floating IP address of deployed instance in public network
-    value: { get_attr: [ floating_ip, floating_ip_address ] }
-
   endpoints:
     description: "Service endpoints"
     value:
-      "Pentaho Web UI":
+      "pentaho":
         str_replace:
           params:
-            host: { get_attr: [ floating_ip, floating_ip_address ] }
+            host: { get_attr: [user_data_instance, first_address] }
             pentaho_port: { get_param: pentaho_port }
           template: "http://host:pentaho_port/pentaho"
 
-  instance_id:
-    description: Resource ID assigned to the newly created instance
-    value: { get_resource: user_data_instance }
-  
-  postgres_root_passwd:
+  postgresql_root_password:
     description: Password for PostgreSQL root user
     value: {  get_resource: postgres_root_passwd }
   
-  pentaho_user_passwd:
+  pentaho_user_password:
     description: Password for pentaho Linux user       
     value: { get_resource: pentaho_user_passwd}
-
-
-

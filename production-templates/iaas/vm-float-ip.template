@@ -90,3 +90,11 @@ outputs:
     description: Floating IP address of deployed instance in public network
     value: { get_attr: [ floating_ip, floating_ip_address ] }
 
+  endpoints:
+    description: "Service endpoints"
+    value:
+      "ssh":
+        str_replace:
+          params:
+            host: { get_attr: [ floating_ip, floating_ip_address ] }
+          template: "ssh://host:22"
