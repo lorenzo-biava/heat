@@ -52,6 +52,7 @@ parameters:
   pentaho_port:
     type: number
     description: "The port for Pentaho service"
+    default: 8080
   zabbix_servers_dn:
     description: "A CSV list of Zabbix servers domain name"
     type: string
@@ -91,6 +92,7 @@ resources:
             volume_id: { get_resource: cinder_volume }
             zabbix_servers_dn: { get_param: zabbix_servers_dn }
             puppet_server_dn: { get_param: puppet_server_dn }
+            pentaho_port: { get_param: pentaho_port }
             $wait_handle$: { get_resource: wait_condition_handle}
           template: |
             #!/bin/bash -v
@@ -271,6 +273,12 @@ resources:
             [[ $? -eq 0 ]] || notify_err "Some problems occurred with ip http://127.0.0.1:8080/pentaho"
             # change default admin password
             curl -u admin:password -X PUT -H"Content-Type: application/json" -d '{"userName": "admin", "password" : "admin_password"}' http://127.0.0.1:8080/pentaho/api/userroledao/updatePassword
+            #Change Pentaho default port
+            if [[ pentaho_port != 8080 ]]; then
+            sed -i "s/8080/pentaho_port/g" /home/pentaho/server/biserver-ce/tomcat/conf/server.xml
+            /home/pentaho/server/biserver-ce/stop-pentaho.sh
+            /home/pentaho/server/biserver-ce/start-pentaho.sh
+            fi
 
             # Zabbix agent installation
             echo "Zabbix Agent setup"
