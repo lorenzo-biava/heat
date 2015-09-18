@@ -256,7 +256,14 @@ resources:
             sed -i "s:\$conf\['servers'\]\[0\]\['port'\] = 5432:\$conf['servers'][0]['port'] = postgresql_port:" /usr/share/phppgadmin/conf/config.inc.php
             sed -i "s:^post_max_size.*$:post_max_size = 20M:" /etc/php5/apache2/php.ini
             sed -i "s:^upload_max_filesize.*$:upload_max_filesize = 20M:" /etc/php5/apache2/php.ini
+            if [[ web_console_port == 80 ]]; then
             a2enconf phppgadmin
+            else
+            echo "Listen web_console_port" >> /etc/apache2/ports.conf
+            echo "<VirtualHost *:web_console_port>" >> /etc/apache2/ports.conf
+            echo "Alias /phppgadmin /usr/share/phppgadmin" >> /etc/apache2/ports.conf
+            echo "</VirtualHost>" >> /etc/apache2/ports.conf
+            fi
             php5enmod mcrypt 
             service apache2 restart || notify_err "Some problems occurred with phppgadmin installation/configuration" 
             
