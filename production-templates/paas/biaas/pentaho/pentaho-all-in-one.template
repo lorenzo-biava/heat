@@ -277,7 +277,7 @@ resources:
             chmod 777 /home/pentaho/server/biserver-ce/tomcat/bin/*.sh
             /home/pentaho/server/biserver-ce/start-pentaho.sh
             #Checking that pentaho/tomcat service is up before to run curl command
-            MY_CHECK=4
+            MY_CHECK=60
             while (( $MY_CHECK )); do
             wget http://127.0.0.1:8080/pentaho
             if [ $? -eq 0 ]; then 
